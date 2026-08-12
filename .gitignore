@@ -1,0 +1,38 @@
+# Allowlist, not a denylist: everything is ignored unless re-included below.
+#
+# This directory is ~500 MB, almost all of it generated state -- session transcripts under
+# projects/, file-history/, telemetry/ -- plus a live OAuth credential at .credentials.json.
+# The config actually worth versioning is ~286 KB. Ignoring by default means `git add -A`
+# cannot stage a credential or a transcript even by mistake; a denylist would leak the first
+# time a new state directory appeared upstream.
+#
+# For a path to be considered at all, every parent directory must also be re-included --
+# that is why the directory entries below are paired with their /** globs. Nothing inside
+# projects/, cache/, sessions/, plans/ etc. is ever examined, because those directories are
+# never re-included and git does not descend into them.
+
+*
+
+!.gitignore
+!CLAUDE.md
+!context.md
+!settings.json
+!hooks/
+!hooks/**
+!skills/
+!skills/**
+!scripts/
+!scripts/**
+
+# Keep .bak files that sit inside the allowed trees. They are superseded and slated for
+# deletion, but committing them once preserves their content in history -- which is the whole
+# reason the .bak convention is being retired.
+!*.bak
+
+# Re-exclude noise inside the allowed trees. Later patterns win.
+skills/**/__pycache__/
+
+# Never track a skill's calibration memory. These accumulate direct references to the user's work --
+# private repo names, source filenames, internal symbols and defect details -- which is exactly
+# what this repo must not carry. The skills recreate these files on demand.
+skills/*/memory/

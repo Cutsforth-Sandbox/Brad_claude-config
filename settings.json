@@ -1,0 +1,49 @@
+{
+  "autoUpdatesChannel": "latest",
+  "theme": "dark",
+  "enabledPlugins": {
+    "gitkraken-hooks@gitkraken": true
+  },
+  "model": "opusplan",
+  "permissions": {
+    "ask": [
+      "Bash(git commit:*)",
+      "Bash(git -C * commit:*)",
+      "Bash(git --no-pager commit:*)",
+      "Bash(git -c * commit:*)"
+    ],
+    "allow": [
+      "mcp__codegraph__*",
+      "Bash(python3 ~/.claude/skills/check-hw-docs/checker.py:*)",
+      "Bash(pdftotext:*)",
+      "Bash(pdfinfo:*)",
+      "Bash(ls:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git *)",
+            "shell": "bash",
+            "command": "python3 \"$HOME/.claude/hooks/git-commit-checklist.py\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "command -v codegraph >/dev/null 2>&1 && exec codegraph prompt-hook; command -v codegraph.cmd >/dev/null 2>&1 && exec codegraph.cmd prompt-hook; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}

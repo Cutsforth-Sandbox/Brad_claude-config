@@ -1,0 +1,3 @@
+interface:
+  display_name: "Git Push History"
+  short_description: "Table a branch's real push events from the reflog"

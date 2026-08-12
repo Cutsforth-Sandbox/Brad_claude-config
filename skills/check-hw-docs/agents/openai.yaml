@@ -1,0 +1,5 @@
+interface:
+  display_name: "Check HW Docs"
+  short_description: "Verify HW_Docs PDFs against manufacturer versions"
+policy:
+  allow_implicit_invocation: false
