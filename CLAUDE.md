@@ -94,11 +94,29 @@ ambiguity, ask it before acting instead of picking an interpretation and proceed
   limited evidence, verify it against the actual record rather than pattern-matching on
   the most memorable instance.
 
-## Plan files
+## Writing style — comments, docs, plans
 
-Plan files hold live state, not history. Delete superseded findings rather than striking
-them through. Migrate anything worth keeping to memory, `context.md`, or the repo first.
-Prune before appending.
+### Code comments
+- Describe the code as it now stands (what/why/how) — never how it got there.
+
+### Documentation
+- Maximally brief and clear; strip adjectives/qualifiers not needed for meaning.
+- No development-process narrative ("a review found…", dates). Keep conclusions and any
+  fact a future reader still needs (a constant's derivation, a measured threshold).
+- "Was X, changed because Y, now Z" → keep only "Z, because [reason]."
+- Short Jira ticket references OK for traceability.
+- Lists of distinct items are bullets, not paragraphs.
+
+### Plans
+- Lead with **Context** (why the work exists, what prompted it), then technical content
+  by topic. No process scaffolding ("Phase 1/2/3" about the planning itself), no
+  revision history or "Version N" framing — current conclusions only; old versions
+  archive to a separate file.
+- Each section: short plain-language explanation (no codebase knowledge needed), then
+  the technical one. Cite `file:line` and summarize; don't quote code blocks.
+- Terse; plain language unless the section needs precision.
+- Plan files hold live state, not history: delete superseded findings (first migrate
+  anything worth keeping to memory, `context.md`, or the repo); prune before appending.
 
 ## Git commits
 
