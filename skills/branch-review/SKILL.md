@@ -39,7 +39,7 @@ Derive the **blast radius** here, once, for brief 3: the repo's shared surface
 (files referenced from two or more entry points or top-level packages), and
 every symbol the diff renamed, removed, or changed behaviorally.
 
-**Done when** every one of the six briefs is marked run or triaged-out with a
+**Done when** every one of the seven briefs is marked run or triaged-out with a
 one-line reason naming what the diff lacks.
 
 ## 3. Confirm
@@ -50,7 +50,8 @@ Ask the user, in one `AskUserQuestion` call, before dispatching anything:
   text of every applicable `CLAUDE.md`; the tests covering changed code, plus
   permission to run the suite; the `context.md` chain (repo, then
   `~/.claude/context.md`, then any document manifest it names). Default off:
-  commit messages, PR body, and linked Jira issues.
+  commit messages, PR body, and linked Jira issues. Brief 7 gathers the intent
+  sources itself; they go to no other brief, and never through this context.
 - **Roster** — the triage result from step 2, so the user can restore a
   triaged-out brief or drop a running one.
 - **Repo agents** — one line per agent found under `.claude/agents/`, not one
@@ -74,6 +75,12 @@ parallel. Each gets: the shared preamble from [`REVIEWERS.md`](REVIEWERS.md),
 its own brief verbatim, the diff text from step 2 (or the diff command if the
 text exceeds ~50 KB), the approved sources, and the parent from step 1. Brief 3
 runs on Sonnet; the rest (including brief 6) inherit the session model.
+
+**Exception — brief 7** dispatches as an `Explore` agent on Sonnet, carrying
+only the shared preamble, its brief verbatim, the parent from step 1, and
+`git diff --stat` output for the same range — never the full diff text or any
+pasted sources. It gathers the intent sources and reads the hunks they point
+at itself.
 
 Fresh means no memory of any earlier review in this conversation. Where an
 earlier pass reached a conclusion, hand it over as a claim to test.

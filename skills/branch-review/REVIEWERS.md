@@ -144,3 +144,23 @@ step removed or bypassed if one existed before the diff.
 
 State the concrete cost in the failure scenario, same as brief 5 — what
 becomes unreproducible or unpinned, not a crash.
+
+## Brief 7 — Premise sanity check
+
+**Trigger:** a statement of intent exists (commit messages, PR body, linked
+issue, plan file). Triaged out as "no stated intent" otherwise.
+
+A quick pass, not a deep examination. Gather the intent sources yourself —
+`git log` on the branch, `gh pr view` if a PR exists, the linked issue or plan
+file — then check the diff against them for red flags only:
+
+- the described problem doesn't exist where described;
+- the fix suppresses a symptom while its cause stays reachable;
+- an existing mechanism (flag, config, helper) already does this;
+- the message claims X, the diff does Y.
+
+Read from the repo only the hunks and files the stated intent points at.
+Report only clear mismatches, each in a line or two — and name a
+`/differential-diagnosis` run as the follow-up for any confirmed premise
+mismatch. When the premise and approach look rational, return `(none)` —
+don't dig deeper.
