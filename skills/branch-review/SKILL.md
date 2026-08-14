@@ -1,6 +1,6 @@
 ---
 name: branch-review
-description: Multi-reviewer review of a branch, diff, or uncommitted changes — finds the branch's real parent, dispatches fresh reviewers against fixed briefs, verifies each finding, and labels what the branch introduced versus inherited. Use when asked to review a branch, a diff, or pending changes.
+description: Multi-reviewer review of a branch, diff, or uncommitted changes, with independent verification of each finding. Use when asked to review a branch, a diff, or pending changes.
 ---
 
 # Branch review
@@ -51,10 +51,9 @@ Ask the user, in one `AskUserQuestion` call, before dispatching anything:
   permission to run the suite; the `context.md` chain (repo, then
   `~/.claude/context.md`, then any document manifest it names). Default off:
   commit messages, PR body, and linked Jira issues. Brief 7 gathers the intent
-  sources itself; they go to no other brief's dispatch prompt. (Step 1's own
-  `git log` for parent-finding may already put commit subject lines in this
-  context — that's for identifying the parent, not for evaluating intent, and
-  none of it is passed to any brief.)
+  sources itself; they go to no other brief's dispatch prompt. (Step 1's
+  parent-finding `git log` may surface commit subjects in this context; none
+  are passed to any brief.)
 - **Roster** — the triage result from step 2, so the user can restore a
   triaged-out brief or drop a running one.
 - **Repo agents** — one line per agent found under `.claude/agents/`, not one

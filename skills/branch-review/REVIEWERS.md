@@ -160,7 +160,9 @@ file — then check the diff against them for red flags only:
 - the message claims X, the diff does Y.
 
 Read from the repo only the hunks and files the stated intent points at.
-Report only clear mismatches, each in a line or two — and name a
+Report only clear mismatches, each in a line or two, quoting the intent claim
+and naming the diff behavior that contradicts it — this format replaces the
+preamble's `file:line` + failure-scenario shape for this brief. Name a
 `/differential-diagnosis` run as the follow-up for any confirmed premise
 mismatch. When the premise and approach look rational, return `(none)` —
 don't dig deeper.

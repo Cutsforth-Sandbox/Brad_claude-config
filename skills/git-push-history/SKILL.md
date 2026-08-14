@@ -1,6 +1,6 @@
 ---
 name: git-push-history
-description: Generate a table of a git branch's real push history since it diverged from its base branch, using the remote-tracking branch's reflog as ground truth. Use when asked for a branch's push history - what's been pushed, and when.
+description: Table a branch's real push history since it diverged from its base, from the remote-tracking reflog. Use when asked for a branch's push history — what's been pushed, and when.
 ---
 
 # Git Push History Table

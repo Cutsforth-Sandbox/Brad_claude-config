@@ -1,6 +1,6 @@
 ---
 name: differential-diagnosis
-description: Rigorously test whether a problem's diagnosis is correct and whether the chosen fix is the right one — enumerate competing explanations, eliminate them on evidence, then judge the remedy against the surviving cause. Use when asked to challenge a diagnosis, verify a root cause, or judge whether a fix solves the real problem.
+description: Test whether a diagnosis is correct and the chosen fix right, by eliminating competing explanations on evidence. Use when asked to challenge a diagnosis, verify a root cause, or judge whether a fix solves the real problem.
 ---
 
 # Differential diagnosis
