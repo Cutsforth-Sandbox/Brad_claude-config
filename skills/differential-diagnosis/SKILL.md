@@ -73,3 +73,6 @@ Done when both verdicts name their evidence.
 Present the table: candidate cause | distinguishing evidence | verdict. Then
 both verdicts and the recommendation. Flag every assumption that survived to
 the end.
+
+Done when the table, both verdicts, the recommendation, and every surviving
+assumption all appear in the report.

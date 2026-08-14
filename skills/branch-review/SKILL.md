@@ -51,7 +51,10 @@ Ask the user, in one `AskUserQuestion` call, before dispatching anything:
   permission to run the suite; the `context.md` chain (repo, then
   `~/.claude/context.md`, then any document manifest it names). Default off:
   commit messages, PR body, and linked Jira issues. Brief 7 gathers the intent
-  sources itself; they go to no other brief, and never through this context.
+  sources itself; they go to no other brief's dispatch prompt. (Step 1's own
+  `git log` for parent-finding may already put commit subject lines in this
+  context — that's for identifying the parent, not for evaluating intent, and
+  none of it is passed to any brief.)
 - **Roster** — the triage result from step 2, so the user can restore a
   triaged-out brief or drop a running one.
 - **Repo agents** — one line per agent found under `.claude/agents/`, not one
@@ -74,7 +77,8 @@ Launch one **fresh** `general-purpose` subagent per brief on the roster, in
 parallel. Each gets: the shared preamble from [`REVIEWERS.md`](REVIEWERS.md),
 its own brief verbatim, the diff text from step 2 (or the diff command if the
 text exceeds ~50 KB), the approved sources, and the parent from step 1. Brief 3
-runs on Sonnet; the rest (including brief 6) inherit the session model.
+runs on Sonnet; brief 7 is the exception below; every other brief (including
+brief 6) inherits the session model.
 
 **Exception — brief 7** dispatches as an `Explore` agent on Sonnet, carrying
 only the shared preamble, its brief verbatim, the parent from step 1, and
@@ -97,6 +101,15 @@ produce it, returning per candidate: **confirmed** (name the inputs and the
 wrong output, quote the line), **plausible** (mechanism real, trigger
 uncertain — say what would settle it), or **refuted**. A candidate already
 backed by a **repro** is confirmed and skips this step.
+
+**Exception — brief 7.** Its candidates have no `file:line` to group by; send
+each mismatch verbatim to one reviewer that did not produce it, keyed on the
+mismatch statement itself. Same three verdicts: **confirmed** (the reviewer
+independently re-checked the named intent source and diff and reaches the same
+mismatch — quote both), **plausible** (the mismatch is real but the intent
+source is ambiguous enough that a different reading would dissolve it), or
+**refuted** (quote the line or intent-source text that the candidate
+misread).
 
 Reach for **plausible** whenever the triggering state is realistic — a
 concurrency race, nil on a rare-but-reachable path (error handler, cold cache,
