@@ -1,6 +1,6 @@
 # Personal preferences
 
-- Whenever a plan file is updated (edited after being written), automatically re-present it via `ExitPlanMode` so I can review the changes — don't wait for me to ask.
+- Whenever a plan file is updated (edited after being written), automatically re-present it via `ExitPlanMode` so I can review any change — don't wait for me to ask.
 - When in doubt whether a nontrivial action needs approval — code changes, running scripts,
   spawning subagents, any real action outside a plan file — default to drafting a plan and
   asking rather than proceeding.
