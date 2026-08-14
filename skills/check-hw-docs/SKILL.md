@@ -55,6 +55,7 @@ render PDFs at all. Use PyMuPDF via Bash instead.
 | `download.rigol.com` | 200 | all three | |
 | `www.rigol.com` | 200 | `last-modified`, `content-length` | Never sends `etag`. |
 | `beyondmeasure.rigoltech.com` | **403** | — | Honours ranged GET: a 1-byte request returns the true size in `Content-Range`. Needs `Referer: https://rigolna.com/support/downloads/`. Redirects onward to an Act-On CDN. |
+| `www.infineon.com` (`/dgdl/...`) | 200/301 | `last-modified`, `content-length` | **Never** sends `etag`. AWS WAF blocks a bare/curl-default User-Agent with `202 Accepted`, `Content-Length: 0`, `x-amzn-waf-action: challenge` — indistinguishable from a broken link unless you check for that header. `checker.py`'s `UA` constant already passes (confirmed 2026-08-13); a hand-rolled check needs the same. Canonical `/dgdl/...` URLs 301-redirect to an `assets/row/public/documents/...` mirror — same file, don't fetch both. |
 
 A field a host never returns is **not comparable** — never treat its absence as a change.
 
