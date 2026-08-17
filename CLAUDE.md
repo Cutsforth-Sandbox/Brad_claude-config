@@ -56,15 +56,14 @@ interpretation.
 
 ## Subagents
 
-- **Spawn subagents at the lowest model — and, where settable, effort — tier that will do
-  the job**; longer wall-clock for fewer tokens is the right trade. Defaults: haiku for
-  lookups and grep-shaped work, sonnet for multi-file edits or synthesis. Escalate one
-  tier after a single failed attempt, never preemptively. **Exception:** verification
-  passes follow the capability floor above — never check strong work with a cheaper
-  model.
-- For read-only lookups prefer the built-in `Explore` agent — the only agent type that
-  skips this file (~1.8k tokens per spawn). Restate in its prompt any rule that must
-  reach it.
+- **Haiku:** search (grep/glob), exploration, reading/reporting files, summarizing
+  results or docs, mechanical edits (format/rename), git status/log summaries.
+- **Sonnet:** code generation/implementation/refactoring, code review, tests, build
+  fixes, documentation.
+- Escalate one tier only after a failed attempt. **Exception:** verification passes
+  follow the capability floor above — never check strong work with a cheaper model.
+- Prefer built-in `Explore` for read-only lookups — the only agent skipping this file
+  (~1.8k tokens/spawn); restate any rule that must reach it.
 
 ## Communication style
 
