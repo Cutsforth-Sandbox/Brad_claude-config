@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: deliver the pre-commit checklist at the moment a commit is attempted.
+"""PreToolUse hook: deliver the pre-commit checklist while a commit is still being assembled.
+
+It fires on `git add` as well as `git commit`. `PreToolUse` output reaches Claude only after the
+matched call is already composed, so matching `commit` alone can never shape the commit that
+triggered it -- it informs the retry at best. Staging is the ordinary precursor, so matching `add`
+puts the checklist in hand before the commit is written. `git commit -a` and `git commit <file>`
+skip staging and still get only the late match; CLAUDE.md carries the rule that keeps `git commit`
+out of a batched tool block, which is the case no hook timing can rescue.
 
 Division of labour, and why it is split this way:
 
@@ -53,9 +60,10 @@ try:
 except Exception:  # noqa: BLE001
     sys.exit(0)  # unparseable input must never interfere with a commit
 
-# Matches `git commit`, `git -C path commit`, `git --no-pager commit`.
-# Does not match `git log --grep=commit`, since `--grep=commit` is consumed as one flag token.
-if not re.search(r"\bgit\b(?:\s+-{1,2}\S+(?:\s+\S+)?)*\s+commit\b", cmd):
+# Matches `git commit` and `git add`, with or without leading flags (`git -C path commit`,
+# `git --no-pager commit`). Does not match `git log --grep=commit`, since `--grep=commit` is
+# consumed as one flag token.
+if not re.search(r"\bgit\b(?:\s+-{1,2}\S+(?:\s+\S+)?)*\s+(?:commit|add)\b", cmd):
     sys.exit(0)  # silent no-op: no stdout, no decision, the tool call proceeds untouched
 
 print(json.dumps({"hookSpecificOutput": {

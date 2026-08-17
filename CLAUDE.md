@@ -109,9 +109,8 @@ interpretation.
 ## Git commits
 
 - Concise messages: **what** changed and briefly **how**; other context only when
-  strictly necessary. (The pre-commit checklist arrives via a `PreToolUse` hook at
-  commit time, enforced by `permissions.ask` rules — see
-  `~/.claude/hooks/git-commit-checklist.py`.)
+  strictly necessary. Send `git commit` as its own tool call, never batched — the
+  pre-commit checklist hook must land before the commit is composed.
 
 <!-- CODEGRAPH_START -->
 ## CodeGraph
