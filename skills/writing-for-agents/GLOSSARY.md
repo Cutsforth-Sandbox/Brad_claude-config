@@ -174,6 +174,12 @@ The desired state where each meaning lives in exactly one authoritative place, s
 
 _Avoid_: home, canonical location
 
+### Cache
+
+A line that restates what the **environment** already answers by looking (config files, `package.json` scripts, the directory layout, `--help` output) — a copy of a lookup, not a fact only the skill knows. Earns its place only when the lookup itself is expensive; a one-file, one-command lookup should stay left to the environment, where it can't go stale. Distinct from **duplication**: that repeats the skill's own meaning in a second place; a cache repeats a meaning the environment already owns.
+
+_Avoid_: restating config, hardcoding, copying
+
 ### Duplication
 
 _Failure mode._ The same meaning given more than one **single source of truth**. It costs maintenance (change one place, you must change the others), costs tokens, and inflates prominence — repeating a meaning weights it on the ladder past its real rank. The accidental inverse of a **leading word**, which raises attention on purpose by repeating a token, never the meaning.

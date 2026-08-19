@@ -2,6 +2,7 @@
 name: writing-great-skills
 description: Reference for writing and editing skills well — the vocabulary and principles that make a skill predictable.
 disable-model-invocation: true
+source: https://github.com/mattpocock/skills/tree/main/skills/productivity/writing-for-agents
 ---
 
 A skill exists to wrangle determinism out of a stochastic system. **Predictability** — the agent taking the same _process_ every run, not producing the same output — is the root virtue; every lever below serves it.
@@ -53,6 +54,8 @@ Where the ladder decides _how far down_ a piece sits, **co-location** decides _w
 ## Pruning
 
 Keep each meaning in a **single source of truth**: one authoritative place, so changing the behaviour is a one-place edit.
+
+The **environment** is a source of truth too — config files, `package.json` scripts, the directory layout, `--help` output — and a line that restates it is a **cache**: a copy of a lookup, earning its place only when the lookup itself is expensive. Cache what the agent can't find by looking — an unwritten convention, the reason behind a choice, a gotcha no config confesses — and leave one-file, one-command lookups to the environment, where they can't go stale.
 
 Check every line for **relevance**: does it still bear on what the skill does?
 
