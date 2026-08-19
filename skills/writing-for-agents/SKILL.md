@@ -1,5 +1,5 @@
 ---
-name: writing-great-skills
+name: writing-for-agents
 description: Reference for writing and editing skills well — the vocabulary and principles that make a skill predictable.
 disable-model-invocation: true
 source: https://github.com/mattpocock/skills/tree/main/skills/productivity/writing-for-agents
