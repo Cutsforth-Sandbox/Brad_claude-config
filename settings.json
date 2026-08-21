@@ -51,6 +51,30 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Write(~/.claude/plans/*.md)",
+            "shell": "bash",
+            "command": "python3 \"$HOME/.claude/hooks/plan-outline-check.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Edit(**/plans/*.md)",
+            "shell": "bash",
+            "command": "python3 \"$HOME/.claude/hooks/plan-outline-check.py\""
+          }
+        ]
+      }
     ]
   }
 }

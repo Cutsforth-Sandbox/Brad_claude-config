@@ -100,6 +100,13 @@ interpretation.
   by topic. No process scaffolding ("Phase 1/2/3" about the planning itself), no
   revision history or "Version N" framing — current conclusions only; old versions
   archive to a separate file.
+- Immediately after **Context**, insert a numbered **Outline** section: a
+  table (Section | Summary) naming every later section with a 1–2 sentence
+  summary — tight enough for fast scanning, not a miniature restatement.
+  - If a section is gated by an open question or dependency, name it in that
+    row's summary — never collected in a separate list.
+  - Note which sections can proceed immediately vs. wait on something
+    (per-row or one line below the table).
 - Each section: short plain-language explanation (no codebase knowledge needed), then
   the technical one. Cite `file:line` and summarize; don't quote code blocks.
 - Terse; plain language unless the section needs precision.

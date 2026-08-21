@@ -1,0 +1,26 @@
+{
+  "skill_name": "style-check",
+  "evals": [
+    {
+      "id": 0,
+      "name": "commit-message-mixed-changes",
+      "prompt": "Does this commit message follow my style guide?\n\ngit-commit-checklist: match `git add` so the checklist precedes the commit\n\nPreToolUse output reaches Claude only after the matched call is composed, so\nmatching `commit` alone could never shape the commit that triggered it. Staging\nis the ordinary precursor, so the hook now matches `add` too.\n\nCLAUDE.md: the Git commits parenthetical only said a hook exists, which gave\nnothing actionable at composition time. Replaced with the one rule no hook\ntiming can enforce - keep `git commit` out of a batched tool block.",
+      "expected_output": "Real commit (fd1bf74) that describes two distinct changes (a hook-matcher fix and a CLAUDE.md wording fix) in one message. Tests whether the skill over-flags this as 'extra context' or correctly reads both paragraphs as necessary why-explanations for two legitimately bundled changes.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "code-comment-bug-history",
+      "prompt": "Check this code comment against my style rules \u2014 is it fine as-is or does it need trimming? It's the module docstring from skills/check-hw-docs/checker.py lines 3-28:\n\nThis script NEVER writes to context.md or to any document folder. Tier-1 downloads\ngo to a temp dir that is removed on exit. All judgment (steps 3-6 of SKILL.md)\nstays with the model.\n\nWhy the odd-looking details matter (each one is a bug this script exists to prevent):\n\n  * User-Agent must NOT be the urllib default. The raspberrypi.com redirect chain returns 403\n    to any UA containing \"Python-urllib\"; every other string tested passes. (Which hop issues\n    the 403 was never established -- it was only ever observed through a followed chain, so\n    do not attribute it to a specific host.) No browser impersonation is needed or used.\n  * urllib returns only the FINAL response after redirects, so reading a redirect hop's\n    \"Content-Length: 0\" is structurally impossible here. (curl -sIL prints every hop and\n    caused 18 false \"stale\" verdicts when parsed with `tail -1`.)\n  * Manifest rows are split with str.split('|'), which preserves empty fields. bash's\n    `IFS=$'\\t' read` collapses consecutive tabs, silently shifting every field after an\n    empty `etag` -- the second cause of those false verdicts.",
+      "expected_output": "Deliberately borderline: mixes legitimate hidden-constraint documentation (allowed) with narrated bug-history phrasing like 'caused 18 false stale verdicts' (arguably violates the comments rule against narrating how the code got there). Tests whether the skill can tell the two apart rather than blanket-flagging or blanket-passing.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "plan-outline-compliance",
+      "prompt": "Review this plan against my format: ~/.claude/plans/i-want-to-add-reflective-gem.md",
+      "expected_output": "A real plan file written to already follow the Context-then-Outline rule. Should come back clean (no violations) — tests that the skill doesn't over-trigger on a compliant document.",
+      "files": ["~/.claude/plans/i-want-to-add-reflective-gem.md"]
+    }
+  ]
+}

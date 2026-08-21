@@ -89,7 +89,7 @@ Fresh means no memory of any earlier review in this conversation. Where an
 earlier pass reached a conclusion, hand it over as a claim to test.
 
 Where subagent dispatch is unavailable, work each brief on the roster yourself,
-sequentially, in this context, and name that in step 6.
+sequentially, in this context, and name that in step 7.
 
 **Done when** every brief on the roster has returned candidates or `(none)`.
 
@@ -121,7 +121,30 @@ effect is unobservable.
 
 **Done when** every candidate carries a verdict.
 
-## 6. Report
+## 6. Style check
+
+Run the `style-check` skill directly (no subagent — it's already a single,
+cheap pass) against everything the diff touches in its four categories:
+
+- Every plan file the diff adds or changes (category: Plans).
+- Every doc file the diff adds or changes, excluding any file whose
+  frontmatter carries a `source:` field (synced third-party content, not the
+  user's own writing).
+- Comment-only added/changed lines in touched code files (category: Code
+  comments) — feed the skill just those lines, not the surrounding code.
+- Every commit message on the branch (category: Git commits), from step 1's
+  commit list — one check per commit, not the whole range at once.
+
+Skip a bullet with nothing to check. Fold findings straight into step 7's
+report, tagged with origin `this branch` (a style finding is always about
+what the diff itself wrote) — no step 5-style verification pass; the
+skill's own report is already "flag and suggest," not a bug claim needing a
+second opinion.
+
+**Done when** all four bullets have been checked or skipped for lacking
+matching files.
+
+## 7. Report
 
 Before assembling: check whether any brief triaged out in step 2 on a genuinely
 borderline call, and note it in one line if so. Check whether any surviving
@@ -135,8 +158,9 @@ finding's **origin**: introduced by this branch, inherited from the parent, or a
 gap worth flagging regardless. Name the refuted candidates in one line.
 
 **Done when** every candidate appears in the report or in that refuted line,
-every brief that returned `(none)` is listed as having found nothing, and any
-brief worked in-context rather than by subagent is named as such.
+every brief that returned `(none)` is listed as having found nothing, every
+style-check finding from step 6 appears in the report too, and any brief
+worked in-context rather than by subagent is named as such.
 
 Then write or update `memory/<repo-slug>.md` (create the file if it doesn't
 exist yet — every repo starts with none): briefs that triaged out and why (if
