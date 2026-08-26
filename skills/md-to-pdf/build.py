@@ -16,12 +16,16 @@ launches it before it can repair its own import path.
 
 import argparse
 import hashlib
+import html
 import logging
 import os
 import re
 import shutil
 import subprocess
 import sys
+import threading
+import _thread
+import warnings
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent
@@ -32,10 +36,19 @@ FONT_DIR_DEFAULT = SKILL_DIR / "fonts"
 # The stamp hashes this list, so editing it forces a rebuild.
 DEPS = ["markdown>=3.5,<4", "xhtml2pdf>=0.2.17,<0.3"]
 
+# Shared between the initial render and the structural-repair re-render, so the
+# two calls can never drift apart from each other.
+MARKDOWN_EXTENSIONS = ["tables", "fenced_code", "toc"]
+
+DIAGRAM_EXTENSIONS = (".puml", ".plantuml", ".iuml")
+
 # Top-level packages that must be present for a _deps tree to count as usable.
 # pypdf arrives with xhtml2pdf and is what reads back the outline for the
-# contents listing, so it belongs in the check.
-DEP_PACKAGES = ["markdown", "xhtml2pdf", "reportlab", "pypdf"]
+# contents listing; svglib and PIL arrive with xhtml2pdf/reportlab too and are
+# what the diagram/image sizing helpers import - all three belong in the check
+# for the same reason: each is a transitive dependency never installed for its
+# own sake, so nothing else here would notice one going missing.
+DEP_PACKAGES = ["markdown", "xhtml2pdf", "reportlab", "pypdf", "svglib", "PIL"]
 
 # Points. reportlab's native unit, so all geometry stays in one system.
 PAGE_SIZES = {"letter": (612.0, 792.0), "a4": (595.28, 841.89)}
@@ -182,6 +195,21 @@ def _ensure_deps():
 # --------------------------------------------------------------------------
 
 
+def _content_frame_size(page_size, want_footer):
+    """(width, height) of the content frame in points, footer space excluded.
+
+    Shared with the diagram sizers (`_fit_svg_size`, `_fit_png_size`) so a
+    diagram is fitted against the exact same rectangle the page layout
+    actually uses, rather than a second, potentially drifting, copy of this
+    arithmetic.
+    """
+    width, height = PAGE_SIZES[page_size]
+    inner_w = width - 2 * MARGIN
+    full_h = height - 2 * MARGIN
+    body_h = full_h - (FOOTER_H + FOOTER_GAP) if want_footer else full_h
+    return inner_w, body_h
+
+
 def _page_css(page_size, want_cover, want_footer):
     """@page templates with explicit frames.
 
@@ -198,9 +226,8 @@ def _page_css(page_size, want_cover, want_footer):
     silently overwriting the other.
     """
     width, height = PAGE_SIZES[page_size]
-    inner_w = width - 2 * MARGIN
+    inner_w, body_h = _content_frame_size(page_size, want_footer)
     full_h = height - 2 * MARGIN
-    body_h = full_h - (FOOTER_H + FOOTER_GAP) if want_footer else full_h
     size = "{:.2f}pt {:.2f}pt".format(width, height)
 
     footer_frame = ""
@@ -235,21 +262,40 @@ BASE_CSS = """
 body { font-family: "DejaVuSans", sans-serif; font-size: 10pt; line-height: 1.4; }
 h1, h2, h3 { font-weight: normal; }
 h1 { font-size: 26pt; margin-top: 0; border-bottom: 2px solid #000; padding-bottom: 10pt; }
-/* -pdf-keep-with-next avoids orphaning a heading at the bottom of a page when
-   the content right after it (often a screenshot) doesn't fit and flows to
-   the next page instead. */
+/* -pdf-keep-with-next moves a heading to the next page as a unit with
+   whatever follows it, rather than leaving it stranded alone at the bottom of
+   a page. page-break-after:avoid is not enough on its own - xhtml2pdf's
+   parser only acts on page-break-after/before values of always/right/left,
+   silently ignoring avoid (confirmed against parser.py's handling; the
+   declaration is kept here for future engines that do honor it). */
 h2 { font-size: 16pt; margin-top: 22pt; page-break-after: avoid; -pdf-keep-with-next: true; }
 h3 { font-size: 13pt; margin-top: 16pt; page-break-after: avoid; -pdf-keep-with-next: true; }
-/* page-break-inside:avoid alone isn't enough for xhtml2pdf to keep a table
-   from splitting once it's underway — -pdf-keep-with-next is what actually
-   forces the whole table to move to the next page as one unit. */
-table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 10pt 0; page-break-inside: avoid; -pdf-keep-with-next: true; }
+/* This shared rule carries no -pdf-keep-with-next: on a large table it forces
+   reportlab into a repeated whole-table refitting attempt that is quadratic
+   and catastrophic on real documents (measured: >90s on a 60-row table where
+   the same document renders in 3.6s without it). A large table may therefore
+   split across a page break; page-break-inside:avoid is kept for engines that
+   implement it (xhtml2pdf's parser does not act on it either, for the same
+   reason noted on h2/h3 above). A small table (TABLE_KEEP_TOGETHER_MAX_ROWS
+   or fewer rows) gets the same protection headings have, via an inline
+   -pdf-keep-with-next added per-table in _size_table_columns rather than
+   here, since the decision depends on that table's own row count. */
+table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 10pt 0; page-break-inside: avoid; }
 th, td { border: none; border-bottom: 1px solid #999; padding: 4pt 10pt; text-align: left; font-size: 10pt; word-wrap: break-word; }
 th { font-weight: bold; border-bottom: 2px solid #000; }
 code { color: #c8ae74; font-family: "DejaVuSansMono", monospace; font-size: 11pt; }
 pre { background-color: #f2f2f2; padding: 6pt; font-family: "DejaVuSansMono", monospace; font-size: 8pt; }
 img { max-width: 100%; margin: 8pt 0; }
 hr { border: none; border-top: 2px solid #000; margin: 20pt 0; }
+
+/* -pdf-keep-with-next on the image, not the wrapping div, is what actually
+   keeps a rendered diagram with its caption - the div isn't itself a
+   flowable xhtml2pdf tracks for this purpose. Scoped to one image rather
+   than a long table, this is cheap: see the table rule above for why the
+   same property is not used there. */
+.figure { text-align: center; margin: 10pt 0; }
+.figure img { -pdf-keep-with-next: true; }
+.figure-caption { font-size: 9pt; color: #444; margin-top: 4pt; }
 
 #footer_content { text-align: center; font-size: 8pt; color: #666; }
 
@@ -259,9 +305,12 @@ hr { border: none; border-top: 2px solid #000; margin: 20pt 0; }
 .cover-date { font-size: 11pt; color: #666; margin-top: 30pt; }
 
 .toc-head { font-size: 20pt; margin-bottom: 14pt; border-bottom: 2px solid #000; padding-bottom: 8pt; }
-/* The shared table rules keep a table whole on one page; a contents listing is
-   the one table that must be free to run over as many pages as it needs. */
-table.toc { page-break-inside: auto; -pdf-keep-with-next: false; margin: 0; }
+/* page-break-inside:auto overrides the shared rule's avoid, since a contents
+   listing must be free to run over as many pages as it needs. This table
+   never receives the small-table -pdf-keep-with-next either: it is built by
+   _toc_html and assembled straight into the body, never passing through the
+   per-file _size_table_columns pass that adds it. */
+table.toc { page-break-inside: auto; margin: 0; }
 table.toc td { border-bottom: none; padding: 2pt 0; }
 td.toc-p { width: 8%; text-align: right; }
 td.toc-t { width: 92%; }
@@ -383,10 +432,192 @@ _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.I)
 _SRC_ATTR_RE = re.compile(
     r"(?<![-\w])(src\s*=\s*)(\"[^\"]*\"|'[^']*'|[^\s>]+)", re.I
 )
+_ALT_ATTR_RE = re.compile(r"(?<![-\w])alt\s*=\s*(\"([^\"]*)\"|'([^']*)'|(\S+))", re.I)
 _REMOTE_RE = re.compile(r"^(https?:|data:)", re.I)
 
+# A diagram's rendered PNG or SVG carries this beside the source hash it was
+# produced from, so a pre-rendered sibling can be checked for drift without
+# trusting mtime - which OneDrive sync, `git checkout`, and a plain copy all
+# rewrite regardless of whether the content actually changed.
+_DIAGRAM_HASH_RE = re.compile(rb"md-to-pdf:source-sha256:([0-9a-f]{64})")
+# The whole comment, in str form for _stamp_diagram (which reads/rewrites the
+# .svg as text, to avoid disturbing its encoding) - removes a stale stamp
+# cleanly before writing a new one, rather than leaving an emptied <!-- --> .
+_DIAGRAM_HASH_COMMENT_RE = re.compile(
+    r"[ \t]*<!--\s*md-to-pdf:source-sha256:[0-9a-f]{64}\s*-->\s*\n?"
+)
+_DIAGRAM_SIBLING_EXTS = (".svg", ".png")
 
-def _map_images(html, base_dir, assets):
+
+def _diagram_source_hash(source_path):
+    return hashlib.sha256(source_path.read_bytes()).hexdigest()
+
+
+def _fit_svg_size(svg_path, frame_w_pt, frame_h_pt):
+    """(width_pt, height_pt) fitting an SVG's own intrinsic size into a
+    frame_w_pt x frame_h_pt box, preserving aspect ratio.
+
+    xhtml2pdf renders an inline <img src="....svg"> as native vector content
+    (real path/text operators in the page's own content stream - confirmed by
+    inspecting the produced PDF, not by reading xhtml2pdf's source, which
+    documents a *different*, rasterizing method as the only path and turns out
+    not to be the one actually used for an ordinary inline image). Vector
+    output has no pixel resolution to run out of, so fitting it into the frame
+    is purely a layout question, not a legibility one - unlike a raster PNG.
+    """
+    from svglib.svglib import svg2rlg
+
+    drawing = svg2rlg(str(svg_path))
+    if drawing.width <= 0 or drawing.height <= 0:
+        # An <svg> root with no width/height/viewBox parses fine (svglib
+        # returns a real, usually-empty Drawing) but gives a 0x0 size - not a
+        # contrived case, this is what any hand-authored or non-PlantUML SVG
+        # missing those attributes produces.
+        _fail(
+            "diagram has no usable size (width or height is 0): {}\n"
+            "  add an explicit width/height or viewBox to its <svg> root".format(
+                svg_path
+            )
+        )
+    scale = min(frame_w_pt / drawing.width, frame_h_pt / drawing.height)
+    return drawing.width * scale, drawing.height * scale
+
+
+def _fit_png_size(png_path, frame_w_pt, frame_h_pt):
+    """(width_pt, height_pt) fitting a PNG's pixel size into a frame,
+    treating its pixels as points (72dpi) - matching what xhtml2pdf itself
+    assumes for a raster image with no explicit width/height."""
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(png_path) as im:
+            px_w, px_h = im.size
+    except UnidentifiedImageError:
+        _fail("diagram sibling is not a readable image: {}".format(png_path))
+    if px_w <= 0 or px_h <= 0:
+        _fail("diagram has no usable size (width or height is 0): {}".format(png_path))
+    scale = min(frame_w_pt / px_w, frame_h_pt / px_h)
+    return px_w * scale, px_h * scale
+
+
+def _render_diagram(source_path, plantuml_exe, cache_dir):
+    """Render a PlantUML source to SVG via a locally installed `plantuml`,
+    cached by source content so a rebuild only re-invokes the binary when the
+    source actually changed.
+
+    SVG, not PNG: xhtml2pdf renders it as vector content (see _fit_svg_size),
+    which is simpler and has no resolution ceiling to manage - and it is what
+    the sibling-fallback path below already produces for every diagram this
+    skill ships against.
+
+    Runs under a subprocess timeout and PLANTUML_SECURITY_PROFILE=SANDBOX so a
+    `.puml` from any cloned repo cannot use `!include`/`!includeurl` to read
+    local files or reach the network at render time. The env var form is
+    required - PlantUML's `-D` system-property form of this flag is a known,
+    filed no-op (plantuml/plantuml#1450): it accepts the flag and enforces
+    nothing.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    digest = _diagram_source_hash(source_path)
+    out_svg = cache_dir / "{}.svg".format(digest)
+    if out_svg.is_file():
+        return out_svg
+
+    env = dict(os.environ)
+    env["PLANTUML_SECURITY_PROFILE"] = "SANDBOX"
+    tmp_dir = cache_dir / "tmp-{}".format(os.getpid())
+    tmp_dir.mkdir(exist_ok=True)
+    try:
+        try:
+            result = subprocess.run(
+                [
+                    plantuml_exe, "-tsvg", "--ignore-startuml-filename",
+                    "-o", str(tmp_dir.resolve()), str(source_path),
+                ],
+                env=env, capture_output=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            _fail(
+                "diagram render timed out after 60s for {}".format(source_path)
+            )
+        # --ignore-startuml-filename: without it, a source starting with
+        # `@startuml Name` makes PlantUML write Name.svg instead of
+        # <source_path.stem>.svg, and the check below would report a
+        # successful render as a failure for not finding the file it expects.
+        rendered = tmp_dir / (source_path.stem + ".svg")
+        if result.returncode or not rendered.is_file():
+            _fail(
+                "diagram render failed for {}:\n{}".format(
+                    source_path, result.stderr.decode("utf-8", "replace")
+                )
+            )
+        os.replace(str(rendered), str(out_svg))
+    finally:
+        shutil.rmtree(str(tmp_dir), ignore_errors=True)
+    return out_svg
+
+
+def _find_diagram_sibling(source_path):
+    for ext in _DIAGRAM_SIBLING_EXTS:
+        candidate = source_path.with_suffix(ext)
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _verify_diagram_sibling(sibling_path, source_path):
+    """_fail unless `sibling_path` carries a hash matching `source_path`'s
+    current content - so a pre-rendered diagram can never silently drift from
+    the source it depicts."""
+    data = sibling_path.read_bytes()
+    m = _DIAGRAM_HASH_RE.search(data)
+    stamp_cmd = "python3 build.py --stamp-diagram {} {}".format(
+        sibling_path, source_path
+    )
+    if not m:
+        _fail(
+            "diagram sibling carries no recorded source hash, so it cannot be "
+            "verified against its source and is treated as stale:\n"
+            "  sibling: {}\n  source:  {}\n"
+            "  once you have confirmed by eye that the sibling matches its "
+            "current source, bless it with:\n    {}".format(
+                sibling_path, source_path, stamp_cmd
+            )
+        )
+    if m.group(1).decode() != _diagram_source_hash(source_path):
+        _fail(
+            "diagram sibling is stale - its recorded source hash does not "
+            "match the current source:\n  sibling: {}\n  source:  {}\n"
+            "  regenerate it (with `plantuml` on PATH) or, once you have "
+            "confirmed by eye that the sibling now matches, re-bless it "
+            "with:\n    {}".format(sibling_path, source_path, stamp_cmd)
+        )
+
+
+def _stamp_diagram(sibling_path, source_path):
+    """Record `source_path`'s current hash into `sibling_path`, for a
+    pre-existing diagram image that predates this hash check and has been
+    manually confirmed (by a human, not by this tool) to already match its
+    source. Only .svg is supported: a trailing XML comment is invisible to
+    every SVG viewer and renderer, which is not true of PNG without writing a
+    text chunk into the image itself."""
+    sibling_path = Path(sibling_path)
+    source_path = Path(source_path)
+    if sibling_path.suffix.lower() != ".svg":
+        _fail("--stamp-diagram only supports an .svg sibling, got: {}".format(sibling_path))
+    if not sibling_path.is_file():
+        _fail("no such sibling file: {}".format(sibling_path))
+    if not source_path.is_file():
+        _fail("no such diagram source: {}".format(source_path))
+    text = sibling_path.read_text(encoding="utf-8")
+    text = _DIAGRAM_HASH_COMMENT_RE.sub("", text)
+    digest = _diagram_source_hash(source_path)
+    text = text.rstrip() + "\n<!-- md-to-pdf:source-sha256:{} -->\n".format(digest)
+    sibling_path.write_text(text, encoding="utf-8")
+    print("md-to-pdf: stamped {} with {}'s current hash".format(sibling_path, source_path))
+
+
+def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir):
     """Route every local <img src> through an opaque key served by link_callback.
 
     xhtml2pdf resolves a callback's return value as a filesystem path and skips
@@ -394,27 +625,83 @@ def _map_images(html, base_dir, assets):
     `C:\\...` straight into src and `C:` is read as a URI scheme. Keys are unique
     per document so inputs from different directories can each resolve their own
     relative paths.
+
+    A reference to a PlantUML source (.puml/.plantuml/.iuml) is rendered from
+    that source through a locally installed `plantuml`, or - lacking one -
+    resolved to a pre-rendered sibling image whose recorded hash is checked
+    against the source, so a diagram can never silently drift from what it
+    depicts. Either way the result is wrapped in a captioned figure, using the
+    Markdown alt text as the caption.
     """
     from urllib.parse import unquote
 
-    def fix_tag(tag_match):
-        def fix_src(attr_match):
-            lead, raw = attr_match.group(1), attr_match.group(2)
-            quote = raw[0] if raw[:1] in ("\"", "'") else ""
-            uri = raw[1:-1] if quote else raw
-            if _REMOTE_RE.match(uri):
-                return attr_match.group(0)
-            # A percent-escaped space is the normal Markdown spelling of a path
-            # with a space in it, and never a literal '%20' on disk.
-            path = Path(unquote(uri))
-            resolved = (path if path.is_absolute() else base_dir / path).resolve()
-            if not resolved.is_file():
-                _fail("image not found: {}\n  referenced as: {}".format(resolved, uri))
-            key = "mdpdf-asset-{}".format(len(assets))
-            assets[key] = str(resolved)
-            return "{}{}{}{}".format(lead, quote or '"', key, quote or '"')
+    frame_w, frame_h = frame_size
+    plantuml_exe = shutil.which("plantuml")
 
-        return _SRC_ATTR_RE.sub(fix_src, tag_match.group(0), count=1)
+    def fix_tag(tag_match):
+        tag = tag_match.group(0)
+        src_match = _SRC_ATTR_RE.search(tag)
+        if not src_match:
+            return tag
+        raw = src_match.group(2)
+        quote = raw[0] if raw[:1] in ("\"", "'") else ""
+        uri = raw[1:-1] if quote else raw
+        if _REMOTE_RE.match(uri):
+            return tag
+        # A percent-escaped space is the normal Markdown spelling of a path
+        # with a space in it, and never a literal '%20' on disk.
+        path = Path(unquote(uri))
+        resolved = (path if path.is_absolute() else base_dir / path).resolve()
+
+        if resolved.suffix.lower() in DIAGRAM_EXTENSIONS:
+            if not resolved.is_file():
+                _fail(
+                    "diagram source not found: {}\n  referenced as: {}".format(
+                        resolved, uri
+                    )
+                )
+            if plantuml_exe:
+                asset_path = _render_diagram(resolved, plantuml_exe, diagram_cache_dir)
+                width_pt, height_pt = _fit_svg_size(asset_path, frame_w, frame_h)
+            else:
+                sibling = _find_diagram_sibling(resolved)
+                if sibling is None:
+                    candidates = ", ".join(
+                        str(resolved.with_suffix(ext)) for ext in _DIAGRAM_SIBLING_EXTS
+                    )
+                    _fail(
+                        "no `plantuml` on PATH and no pre-rendered sibling image "
+                        "for: {}\n  looked for: {}".format(resolved, candidates)
+                    )
+                _verify_diagram_sibling(sibling, resolved)
+                asset_path = sibling
+                if sibling.suffix.lower() == ".svg":
+                    width_pt, height_pt = _fit_svg_size(sibling, frame_w, frame_h)
+                else:
+                    width_pt, height_pt = _fit_png_size(sibling, frame_w, frame_h)
+
+            key = "mdpdf-asset-{}".format(len(assets))
+            assets[key] = str(asset_path)
+            alt_match = _ALT_ATTR_RE.search(tag)
+            caption = ""
+            if alt_match:
+                caption = alt_match.group(2) or alt_match.group(3) or alt_match.group(4) or ""
+            caption_html = (
+                '<div class="figure-caption">{}</div>'.format(_escape(caption))
+                if caption
+                else ""
+            )
+            return (
+                '<div class="figure"><img src="{key}" width="{w:.1f}pt" '
+                'height="{h:.1f}pt" />{cap}</div>'
+            ).format(key=key, w=width_pt, h=height_pt, cap=caption_html)
+
+        if not resolved.is_file():
+            _fail("image not found: {}\n  referenced as: {}".format(resolved, uri))
+        key = "mdpdf-asset-{}".format(len(assets))
+        assets[key] = str(resolved)
+        new_src = "{}{}{}{}".format(src_match.group(1), quote or '"', key, quote or '"')
+        return tag[: src_match.start()] + new_src + tag[src_match.end() :]
 
     return _IMG_TAG_RE.sub(fix_tag, html)
 
@@ -422,6 +709,20 @@ def _map_images(html, base_dir, assets):
 MIN_COL_PCT = 15.0
 _CODE_WEIGHT = 1.15
 _TAG_RE = re.compile(r"<[^>]+>")
+
+# -pdf-keep-with-next on a table forces reportlab into a repeated whole-table
+# refitting attempt that is quadratic in row count. Measured directly against
+# this file's own generated markup (table-layout:fixed plus the per-cell
+# widths _size_table_columns adds - a plainer table is far more forgiving, so
+# calibrating against anything less than the real output understates the
+# cost): a 20-table document renders in 1.35s per table at 12 rows, and does
+# not finish in 15s at 13. This threshold sits with a solid margin below that
+# cliff - confirmed safe even at 40 tables (double the calibration load) - so
+# a small table still gets the same header-orphan protection headings have,
+# while a large one accepts a rare mid-table split rather than the
+# catastrophic refit.
+TABLE_KEEP_TOGETHER_MAX_ROWS = 10
+_TABLE_OPEN_RE = re.compile(r"^<table([^>]*)>", re.I)
 
 
 def _cell_text_width(cell_html):
@@ -499,6 +800,19 @@ def _size_table_columns(html):
         rows = [(m, cells) for m, cells in rows if cells]
         if not rows:
             return table_html
+
+        if len(rows) <= TABLE_KEEP_TOGETHER_MAX_ROWS:
+            def add_keep_with_next(open_match):
+                attrs = open_match.group(1)
+                decl = "-pdf-keep-with-next:true"
+                if _STYLE_RE.search(attrs):
+                    attrs = _STYLE_RE.sub(r"\1" + decl + ";", attrs, count=1)
+                else:
+                    attrs = '{} style="{}"'.format(attrs, decl)
+                return "<table{}>".format(attrs)
+
+            table_html = _TABLE_OPEN_RE.sub(add_keep_with_next, table_html, count=1)
+
         ncols = max(len(cells) for _, cells in rows)
         if ncols < 2:
             return table_html
@@ -541,20 +855,192 @@ def _size_table_columns(html):
 
 
 # --------------------------------------------------------------------------
+# Structural lint: rendered-output mismatch with likely source intent
+# --------------------------------------------------------------------------
+
+# A list marker (or a fence) starting a line inside a block that cannot
+# legitimately contain one. Detected from python-markdown's own OUTPUT, not a
+# source-level guess: a source regex loose enough to catch a glued list also
+# fires on correctly blank-line-separated Markdown (measured at thousands of
+# false positives per hundred files), because the real question - does this
+# line start a new block or continue the current one - is exactly what the
+# block parser already answered when it produced this HTML.
+_STRUCT_OPEN_RE = re.compile(r"<(p|li|td|blockquote)(?:\s[^>]*)?>", re.I)
+
+
+def _iter_struct_containers(html):
+    """Yield (tag, inner_html) for each top-level p/li/td/blockquote in html.
+
+    Tracks nesting depth rather than matching a bare non-greedy backreference
+    (<(p|li|td|blockquote)...>(.*?)</\\1>) - that stops at the *first*
+    same-name close tag, which for a nested <li> (a sub-list inside a list
+    item) or a nested <blockquote> silently drops everything in the outer
+    container that follows the nested one's own close: confirmed directly,
+    that content ends up in no captured group at all, not even a separate
+    later match, because finditer resumes past the truncated span.
+    """
+    pos, n = 0, len(html)
+    while pos < n:
+        m = _STRUCT_OPEN_RE.search(html, pos)
+        if not m:
+            return
+        tag = m.group(1).lower()
+        open_re = re.compile(r"<{}(?:\s[^>]*)?>".format(tag), re.I)
+        close_re = re.compile(r"</{}>".format(tag), re.I)
+        depth, scan, end = 1, m.end(), None
+        while scan < n:
+            nxt_close = close_re.search(html, scan)
+            if not nxt_close:
+                break
+            nxt_open = open_re.search(html, scan, nxt_close.start())
+            if nxt_open:
+                depth += 1
+                scan = nxt_open.end()
+                continue
+            depth -= 1
+            scan = nxt_close.end()
+            if depth == 0:
+                end = nxt_close.start()
+                break
+        if end is None:
+            # Unbalanced (shouldn't happen against real python-markdown
+            # output) - skip past the opening tag rather than loop forever.
+            pos = m.end()
+            continue
+        yield tag, html[m.end():end]
+        pos = scan
+
+
+_STRUCT_LIST_RE = re.compile(r"\n[ \t]{0,3}(?:[-*+]|\d{1,2}[.)])[ \t]")
+_STRUCT_FENCE_RE = re.compile(r"(?:^|\n)[ \t]{0,3}(?:```|~~~)")
+
+# The source line's own marker (and any blockquote nesting before it), kept
+# separate from the text that follows so the marker can be stripped before
+# comparing and the leading part can be copied onto an inserted blank line -
+# a bare blank line inside a blockquote would push the list out of the quote.
+_SRC_MARKER_RE = re.compile(r"^((?:[ \t]*>)*[ \t]*)((?:[-*+]|\d{1,2}[.)])[ \t])")
+
+_DECLUTTER_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_DECLUTTER_BOLD = re.compile(r"(\*\*|__)(.*?)\1")
+_DECLUTTER_ITALIC = re.compile(r"(\*|_)(.*?)\1")
+_DECLUTTER_CODE = re.compile(r"`([^`]*)`")
+
+# Chars of decluttered text compared per line - short enough to survive a
+# formatting difference past this point, long enough that two distinct list
+# items rarely share a prefix.
+_STRUCT_PREFIX_LEN = 12
+
+
+def _declutter(text):
+    """Strip inline Markdown syntax so a source line can be text-compared
+    against rendered output, which has already lost that syntax."""
+    text = _DECLUTTER_LINK.sub(r"\1", text)
+    text = _DECLUTTER_BOLD.sub(r"\2", text)
+    text = _DECLUTTER_ITALIC.sub(r"\2", text)
+    text = _DECLUTTER_CODE.sub(r"\1", text)
+    return text
+
+
+def _repair_structure(frag_html, text, source_name, fix):
+    """Find and (for a list) repair a block that rendered as something other
+    than what its source almost certainly meant.
+
+    Two shapes reach here, both caused by python-markdown requiring a blank
+    line before a list or a fence that other renderers (GitHub, CommonMark)
+    do not require: a list glued to the preceding line renders as one run-on
+    paragraph, and a fence glued to preceding text never opens. Only the list
+    shape is repaired - inserting a blank line before a fence that is
+    actually mis-indented inside a list item splits the list and restarts its
+    numbering (verified directly), which is worse than leaving it alone - so
+    a glued fence is reported and left for a human to fix.
+
+    Returns (new_text, new_html, messages). new_text/new_html equal the inputs
+    when fix is False or nothing was repaired.
+    """
+    lines = text.split("\n")
+    cursor = 0
+    inserts = []  # (source_line_index, container_prefix)
+    messages = []
+
+    def locate(plain_after_marker):
+        nonlocal cursor
+        key = _declutter(plain_after_marker).strip()[:_STRUCT_PREFIX_LEN]
+        for i in range(cursor, len(lines)):
+            m = _SRC_MARKER_RE.match(lines[i])
+            if not m:
+                continue
+            rest = _declutter(lines[i][m.end():]).strip()[:_STRUCT_PREFIX_LEN]
+            if rest == key:
+                cursor = i + 1
+                return i, m.group(1)
+        return None, None
+
+    for _tag, inner in _iter_struct_containers(frag_html):
+        lm = _STRUCT_LIST_RE.search(inner)
+        if lm:
+            frag = inner[lm.start() + 1 :].split("\n")[0]
+            plain = html.unescape(_TAG_RE.sub("", frag)).strip()
+            mk = re.match(r"(?:[-*+]|\d{1,2}[.)])[ \t]", plain)
+            after_marker = plain[mk.end() :] if mk else plain
+            line_no, prefix = locate(after_marker)
+            if line_no is None:
+                messages.append(
+                    "{}: a list would render as plain text, but its source line "
+                    "could not be located precisely - no fix applied.".format(
+                        source_name
+                    )
+                )
+            elif fix:
+                inserts.append((line_no, prefix or ""))
+                messages.append(
+                    "{}:{}: list would have rendered as plain text - inserted a "
+                    "blank line before it.".format(source_name, line_no + 1)
+                )
+            else:
+                messages.append(
+                    "{}:{}: list would render as plain text for lack of a blank "
+                    "line before it.".format(source_name, line_no + 1)
+                )
+        if _STRUCT_FENCE_RE.search(inner):
+            messages.append(
+                "{}: a fenced code block runs into surrounding text - check for "
+                "a missing blank line or an unbalanced fence (not auto-fixed: "
+                "this shape is usually a fence mis-indented inside a list, and "
+                "inserting a blank line would split the list instead).".format(
+                    source_name
+                )
+            )
+
+    if not inserts:
+        return text, frag_html, messages
+
+    for line_no, prefix in sorted(inserts, reverse=True):
+        lines.insert(line_no, prefix.rstrip())
+    new_text = "\n".join(lines)
+    import markdown
+
+    new_html = markdown.markdown(new_text, extensions=MARKDOWN_EXTENSIONS)
+    return new_text, new_html, messages
+
+
+# --------------------------------------------------------------------------
 # Document assembly
 # --------------------------------------------------------------------------
 
 
-# Warnings xhtml2pdf emits for input that is unusual but not broken - the
-# resulting page just shows less than a "real" failure would suppress:
+# Warnings xhtml2pdf/svglib emit for input that is unusual but not broken -
+# the resulting page just shows less than a "real" failure would suppress:
 #   - spooling a remote or inline asset through a temp file (routine).
 #   - a <table> with zero rows (raw HTML passthrough; a Markdown-syntax table
 #     always synthesizes a row, so this is not reachable from ordinary
 #     markdown.tables output, but raw HTML in the source can hit it).
+#   - an SVG exported by Inkscape before 0.92: svglib's note about its 90dpi
+#     assumption is informational: nothing is dropped from the page.
 _BENIGN_LOG = (
     "Created temporary file",
     "<table> is empty",
     "<table> rows seem to be inconsistent",
+    "This SVG was created with Inkscape",
 )
 
 
@@ -653,10 +1139,17 @@ def _outline_pages(pdf_path):
     parent immediately before its own children, which matches emission order,
     and _toc_entries replays xhtml2pdf's exact filler-counting rule over that
     order to know which entries are real.
+
+    Reads the whole file into memory first rather than handing PdfReader the
+    path: PdfReader never closes a path-opened file, so a timeout interrupting
+    `walk` below would otherwise leave a handle open on the caller's temp file,
+    and unlinking it while open raises WinError 32 in place of the real error.
     """
+    import io
+
     from pypdf import PdfReader
 
-    reader = PdfReader(str(pdf_path))
+    reader = PdfReader(io.BytesIO(Path(pdf_path).read_bytes()))
     pages = []
 
     def walk(items):
@@ -753,9 +1246,15 @@ def build(args):
     # utf-8-sig: a byte-order mark left on the front of the text would stop the
     # first heading being a heading at all, silently demoting it to a paragraph.
     raw = [s.read_text(encoding="utf-8-sig") for s in sources]
-    fragments = [
-        markdown.markdown(text, extensions=["tables", "fenced_code", "toc"]) for text in raw
-    ]
+    fragments = []
+    for src, text in zip(sources, raw):
+        frag = markdown.markdown(text, extensions=MARKDOWN_EXTENSIONS)
+        _, frag, messages = _repair_structure(
+            frag, text, str(src), fix=args.fix_structure
+        )
+        for message in messages:
+            print("md-to-pdf: {}".format(message), file=sys.stderr)
+        fragments.append(frag)
 
     number_level = None
     if args.number_sections:
@@ -764,13 +1263,16 @@ def build(args):
             levels.extend(_heading_levels(frag))
         number_level = args.number_from_level or _pick_number_level(levels)
 
+    frame_size = _content_frame_size(args.page_size, args.page_numbers)
+    diagram_cache_dir = SKILL_DIR / "_diagrams"
+
     assets = {}
     counters = []
     processed = []
     for src, frag in zip(sources, fragments):
         if number_level:
             frag = _number_headings(frag, number_level, counters)
-        frag = _map_images(frag, src.parent, assets)
+        frag = _map_images(frag, src.parent, assets, frame_size, diagram_cache_dir)
         frag = _size_table_columns(frag)
         processed.append(frag)
 
@@ -818,43 +1320,112 @@ def build(args):
     tmp_out = out.with_name(out.name + ".part{}".format(os.getpid()))
 
     collector = _RenderErrors()
-    log = logging.getLogger("xhtml2pdf")
-    # Child loggers (xhtml2pdf.tags and friends) propagate here, but the level
-    # has to be lowered or the records never reach the handler.
-    previous_level = log.level
-    log.setLevel(logging.WARNING)
-    log.addHandler(collector)
+    # xhtml2pdf's own logger catches its content-loss warnings; svglib's and
+    # reportlab's are separate loggers, and a diagram that silently drops an
+    # element there (an unreadable embedded image, an unresolved clip path)
+    # would otherwise still end in "Wrote ..." and exit 0 - exactly the class
+    # of bug this collector exists to catch.
+    watched_loggers = [
+        logging.getLogger(name)
+        for name in ("xhtml2pdf", "svglib.svglib", "reportlab")
+    ]
+    previous_levels = [log.level for log in watched_loggers]
+    for log in watched_loggers:
+        log.setLevel(logging.WARNING)
+        log.addHandler(collector)
 
     def render(html):
         del collector.messages[:]
-        with tmp_out.open("wb") as fh:
-            result = pisa.CreatePDF(
-                html, dest=fh, link_callback=lambda uri, rel: assets.get(uri, uri)
-            )
+        # reportlab's own content-loss signals (a table cell/flowable that
+        # doesn't fit, an unsupported text direction) mostly go through
+        # `warnings.warn`, not `logging` - the `reportlab` entry in
+        # watched_loggers above catches only the small part of reportlab that
+        # does use logging (currently nothing above DEBUG). This capture is
+        # what actually reaches the warnings.warn path. It still cannot reach
+        # a missing font glyph, which reportlab reports by writing straight to
+        # stderr through its own pre-logging warnOnce mechanism - no Python
+        # hook observes that path.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with tmp_out.open("wb") as fh:
+                result = pisa.CreatePDF(
+                    html, dest=fh, link_callback=lambda uri, rel: assets.get(uri, uri)
+                )
+        warning_messages = [
+            str(w.message) for w in caught
+            if not any(b in str(w.message) for b in _BENIGN_LOG)
+        ]
         # result.err is a count, but xhtml2pdf 0.2.17 never increments it; the
-        # collector is the signal that actually fires.
-        if result.err or collector.messages:
-            detail = "\n".join("  " + m for m in collector.messages[:10])
+        # collector (and now warning_messages) is the signal that actually fires.
+        if result.err or collector.messages or warning_messages:
+            detail = "\n".join(
+                "  " + m for m in (collector.messages + warning_messages)[:10]
+            )
             tmp_out.unlink()
             _fail("PDF generation failed:\n{}".format(detail or "  (no detail)"))
 
+    # signal.SIGALRM does not exist on Windows, so a daemon Timer firing
+    # interrupt_main is the only cross-platform wall-clock ceiling available.
+    # daemon=True matters: a non-daemon Timer makes interpreter shutdown join
+    # it, so an unrelated failure at t=0 would otherwise sit out the whole
+    # budget before its own error is even reported (measured: 4.13s for a 4s
+    # timer around an immediate sys.exit). The fired flag is what lets a
+    # real Ctrl-C during the window still read as Ctrl-C rather than a timeout.
+    #
+    # Once set, timer_fired is never reset until the whole settling loop below
+    # exits - not per pass. _thread.interrupt_main() only schedules the
+    # interrupt; Python's own docs give no guarantee it lands before the next
+    # pass's try block, and Timer.cancel() cannot retract one already in
+    # flight (confirmed: an interrupt fired just as a pass's guarded code
+    # finishes can still be delivered after that pass's own except clause has
+    # been passed, landing in the between-pass bookkeeping instead). Since
+    # nothing but this timer ever sets the flag, catching KeyboardInterrupt
+    # once for the whole loop - rather than once per pass - closes that gap
+    # without risking a real Ctrl-C being misreported as a timeout.
+    timer_fired = [False]
+
+    def _trip():
+        timer_fired[0] = True
+        _thread.interrupt_main()
+
     try:
-        # Inserting the contents listing shifts every page it lists, so the
-        # numbers printed in it come from the previous render and are only
-        # correct once the outline stops moving. The listing's own length is
-        # fixed after the first pass, so this settles in three renders; the loop
-        # just proves it.
-        entries = None
-        settled = not want_toc
-        for _ in range(4):
-            render(assemble(entries))
-            if not want_toc:
-                break
-            found = _toc_entries(all_headings, _outline_pages(tmp_out))
-            if entries == found:
-                settled = True
-                break
-            entries = found
+        try:
+            # Inserting the contents listing shifts every page it lists, so the
+            # numbers printed in it come from the previous render and are only
+            # correct once the outline stops moving. The listing's own length is
+            # fixed after the first pass, so this settles in three renders; the
+            # loop just proves it.
+            entries = None
+            settled = not want_toc
+            for _ in range(4):
+                timer = threading.Timer(args.timeout, _trip)
+                timer.daemon = True
+                try:
+                    # timer.start() itself blocks briefly on the new thread's
+                    # startup handshake, which is long enough for a near-zero
+                    # timeout to fire before this line returns - so arming it
+                    # has to be inside the same try as the render it guards,
+                    # or that race raises past this function as a bare
+                    # KeyboardInterrupt.
+                    timer.start()
+                    render(assemble(entries))
+                    if want_toc:
+                        found = _toc_entries(all_headings, _outline_pages(tmp_out))
+                finally:
+                    timer.cancel()
+                if not want_toc:
+                    break
+                if entries == found:
+                    settled = True
+                    break
+                entries = found
+        except KeyboardInterrupt:
+            if timer_fired[0]:
+                _fail(
+                    "render exceeded --timeout {}s; raise it if the "
+                    "document is just large, not stuck".format(args.timeout)
+                )
+            raise
         if not settled:
             print(
                 "md-to-pdf: warning - contents page numbers did not settle; some may "
@@ -863,10 +1434,17 @@ def build(args):
             )
         os.replace(str(tmp_out), str(out))
     finally:
-        log.removeHandler(collector)
-        log.setLevel(previous_level)
-        if tmp_out.exists():
-            tmp_out.unlink()
+        for log, level in zip(watched_loggers, previous_levels):
+            log.removeHandler(collector)
+            log.setLevel(level)
+        try:
+            if tmp_out.exists():
+                tmp_out.unlink()
+        except OSError:
+            # A reader left open across an interrupt (or another process)
+            # can hold the handle a moment longer; losing the cleanup race
+            # is not worth turning into the reported error.
+            pass
 
     print("Wrote {}".format(out))
 
@@ -908,6 +1486,18 @@ def _parse_args(argv):
     )
     p.add_argument("--css", help="extra stylesheet, appended after the built-in CSS")
     p.add_argument("--font-dir", help="directory holding the DejaVu TTFs")
+    p.add_argument(
+        "--fix-structure", dest="fix_structure", action="store_true", default=True,
+        help="repair a list rendered as plain text for lack of a blank line (default: on)",
+    )
+    p.add_argument(
+        "--no-fix-structure", dest="fix_structure", action="store_false",
+        help="report structural mismatches (lists, fences) without repairing them",
+    )
+    p.add_argument(
+        "--timeout", type=int, default=120, metavar="SECONDS",
+        help="wall-clock ceiling per render pass (default: 120)",
+    )
     args = p.parse_args(argv)
     if args.number_from_level:
         args.number_sections = True
@@ -922,9 +1512,19 @@ def main():
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="backslashreplace")
 
+    # A separate utility mode, checked before the OUT.pdf/IN.md positional
+    # parser below since it takes a different shape of arguments and needs
+    # neither python-markdown nor xhtml2pdf.
+    argv = sys.argv[1:]
+    if argv[:1] == ["--stamp-diagram"]:
+        if len(argv) != 3:
+            _fail("--stamp-diagram needs exactly two paths: SVG_SIBLING PUML_SOURCE")
+        _stamp_diagram(argv[1], argv[2])
+        return
+
     # Args first so --help costs nothing, then dependencies, then the build,
     # whose third-party imports are function-local for that reason.
-    args = _parse_args(sys.argv[1:])
+    args = _parse_args(argv)
     _ensure_deps()
     build(args)
 

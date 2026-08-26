@@ -33,10 +33,12 @@
 # Re-exclude noise inside the allowed trees. Later patterns win.
 skills/**/__pycache__/
 
-# A skill's bootstrapped dependency tree, and any PDF it builds while being tested.
-# Both are per-machine and large. Without these, `!skills/**` above re-includes them and
-# the untracked files left by a first run make `scripts/sync-config.sh push` refuse to run.
+# A skill's bootstrapped dependency tree, any PDF it builds while being tested, and
+# md-to-pdf's rendered-diagram cache. All are per-machine and large. Without these,
+# `!skills/**` above re-includes them and the untracked files left by a first run make
+# `scripts/sync-config.sh push` refuse to run.
 skills/**/_deps*/
+skills/**/_diagrams/
 skills/**/*.pdf
 
 # Never track a skill's calibration memory. These accumulate direct references to the user's work --
