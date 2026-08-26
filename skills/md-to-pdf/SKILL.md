@@ -70,15 +70,18 @@ never cached — nothing needs installing by hand, and `_deps/` is gitignored.
 A Markdown image reference to a `.puml`, `.plantuml`, or `.iuml` file is
 treated as a diagram, not a picture:
 
-- If `plantuml` is on `PATH`, the diagram is rendered from that source on every
-  build (cached by content hash, so an unchanged diagram costs nothing on a
-  rebuild). This path needs a `plantuml` install to exercise at all.
-- Otherwise, the build looks for a pre-rendered `<name>.svg` or `<name>.png`
-  next to the source and uses it, but only if it carries a recorded hash of the
-  source it was rendered from, checked against the source's current content.
-  A missing or mismatched hash fails the build, naming both files. This is
-  what keeps a diagram from silently drifting out of sync with its source,
-  since a diagram exported once and never regenerated is easy to forget about.
+- If `plantuml` is on `PATH` and new enough to enforce
+  `PLANTUML_SECURITY_PROFILE=SANDBOX` (see below), the diagram is rendered from
+  that source on every build (cached by content hash, so an unchanged diagram
+  costs nothing on a rebuild). This path needs a `plantuml` install to
+  exercise at all.
+- Otherwise — no `plantuml` on `PATH`, or one too old to sandbox — the build
+  looks for a pre-rendered `<name>.svg` or `<name>.png` next to the source and
+  uses it, but only if it carries a recorded hash of the source it was
+  rendered from, checked against the source's current content. A missing or
+  mismatched hash fails the build, naming both files. This is what keeps a
+  diagram from silently drifting out of sync with its source, since a diagram
+  exported once and never regenerated is easy to forget about.
 - A pre-existing `.svg` that predates this check has no hash yet. Confirm by
   eye that it currently matches its `.puml`, then bless it once:
   `python3 build.py --stamp-diagram SIBLING.svg SOURCE.puml` (a standalone mode,
@@ -96,7 +99,14 @@ treated as a diagram, not a picture:
   environment variable — PlantUML's `-D` system-property form of this flag is a
   known no-op, plantuml/plantuml#1450), since a `.puml` can otherwise use
   `!include`/`!includeurl` to read local files or reach the network at render
-  time.
+  time. Support for the env var itself was added in PlantUML 1.2020.11; an
+  older `plantuml` accepts it and enforces nothing, so the build checks
+  `plantuml -version` first and, if it's too old, falls back to the
+  hash-verified sibling path above rather than rendering unsandboxed — a
+  sibling never executes the `.puml`, so this can't reopen what the check
+  exists to close. Only when there's no usable sibling either does the build
+  fail, naming the reason. Upgrading `plantuml` is the only way to render
+  from source on a machine whose install is this old.
 - The render cache lives in `_diagrams/` beside `_deps/` and is gitignored,
   same as `_deps/`.
 

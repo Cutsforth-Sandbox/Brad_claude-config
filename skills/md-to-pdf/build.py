@@ -15,6 +15,7 @@ launches it before it can repair its own import path.
 """
 
 import argparse
+import functools
 import hashlib
 import html
 import logging
@@ -32,9 +33,26 @@ SKILL_DIR = Path(__file__).resolve().parent
 DEPS_DIR = SKILL_DIR / "_deps"
 FONT_DIR_DEFAULT = SKILL_DIR / "fonts"
 
-# Pinned to a compatible range so every synced machine resolves the same majors.
+# Pinned to a compatible range so every synced machine resolves the same majors,
+# including reportlab/pypdf/svglib/Pillow: xhtml2pdf pulls them in as transitives
+# with only lower bounds of its own, so without an explicit pin here two machines
+# installing the same day can still land on different patch versions of each -
+# and any of the four is a plausible culprit behind a rendering bug that depends
+# on exact internal behaviour. Ranges below match what every synced machine has
+# already resolved and been tested against, except Pillow's floor: 12.0 itself
+# requires Python >=3.10 (its own dist-info says so), so pinning >=12.0 would
+# hard-fail the whole install on an older interpreter that could otherwise get
+# a compatible 11.x. >=11.0 still resolves to 12.3.0 on Python >=3.10 - the
+# version already tested - and degrades instead of failing on an older one.
 # The stamp hashes this list, so editing it forces a rebuild.
-DEPS = ["markdown>=3.5,<4", "xhtml2pdf>=0.2.17,<0.3"]
+DEPS = [
+    "markdown>=3.5,<4",
+    "xhtml2pdf>=0.2.17,<0.3",
+    "reportlab>=4.5,<5",
+    "pypdf>=6.0,<7",
+    "svglib>=2.0,<3",
+    "Pillow>=11.0,<13",
+]
 
 # Shared between the initial render and the structural-repair re-render, so the
 # two calls can never drift apart from each other.
@@ -500,6 +518,37 @@ def _fit_png_size(png_path, frame_w_pt, frame_h_pt):
     return px_w * scale, px_h * scale
 
 
+_PLANTUML_SANDBOX_MIN = (1, 2020, 11)
+_PLANTUML_VERSION_RE = re.compile(r"PlantUML version (\d+)\.(\d+)\.(\d+)")
+
+
+@functools.lru_cache(maxsize=None)
+def _plantuml_supports_sandbox(plantuml_exe):
+    """Whether this plantuml build actually enforces PLANTUML_SECURITY_PROFILE.
+
+    Support for the env var was added in 1.2020.11 (plantuml/plantuml#1450's
+    fix). Confirmed on 1.2020.02: the env var is accepted and silently
+    enforces nothing - a real `!include` resolves identically with or without
+    it set. Below that version there is no way to sandbox a `.puml` at all,
+    so _render_diagram refuses rather than rendering under a false sense of
+    isolation. Memoized: called once per distinct plantuml_exe, not once per
+    diagram.
+
+    Timeout matches the actual render below: both are dominated by the same
+    JVM cold start, so a tighter budget here would fail this check on a
+    slow-starting JVM (AV scanning java.exe, a network-mounted profile) that
+    the real render call would have tolerated fine.
+    """
+    try:
+        result = subprocess.run(
+            [plantuml_exe, "-version"], capture_output=True, timeout=60, text=True,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    m = _PLANTUML_VERSION_RE.search(result.stdout + result.stderr)
+    return bool(m) and tuple(int(g) for g in m.groups()) >= _PLANTUML_SANDBOX_MIN
+
+
 def _render_diagram(source_path, plantuml_exe, cache_dir):
     """Render a PlantUML source to SVG via a locally installed `plantuml`,
     cached by source content so a rebuild only re-invokes the binary when the
@@ -517,6 +566,17 @@ def _render_diagram(source_path, plantuml_exe, cache_dir):
     filed no-op (plantuml/plantuml#1450): it accepts the flag and enforces
     nothing.
     """
+    if not _plantuml_supports_sandbox(plantuml_exe):
+        _fail(
+            "installed `plantuml` ({}) does not enforce "
+            "PLANTUML_SECURITY_PROFILE=SANDBOX - support was added in "
+            "1.2020.11, and an older build accepts the env var while "
+            "enforcing nothing, so a `.puml`'s `!include`/`!includeurl` "
+            "would resolve unsandboxed.\n"
+            "  Upgrade plantuml, or remove it from PATH so this diagram "
+            "instead uses a hash-verified pre-rendered sibling image (see "
+            "--stamp-diagram in SKILL.md).".format(plantuml_exe)
+        )
     cache_dir.mkdir(parents=True, exist_ok=True)
     digest = _diagram_source_hash(source_path)
     out_svg = cache_dir / "{}.svg".format(digest)
@@ -660,7 +720,12 @@ def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir):
                         resolved, uri
                     )
                 )
-            if plantuml_exe:
+            # A plantuml too old to enforce PLANTUML_SECURITY_PROFILE=SANDBOX
+            # (_plantuml_supports_sandbox) is treated the same as no plantuml
+            # at all, falling back to the sibling path rather than _fail-ing
+            # outright - a hash-verified sibling never executes the untrusted
+            # `.puml`, so this doesn't reopen what that check exists to close.
+            if plantuml_exe and _plantuml_supports_sandbox(plantuml_exe):
                 asset_path = _render_diagram(resolved, plantuml_exe, diagram_cache_dir)
                 width_pt, height_pt = _fit_svg_size(asset_path, frame_w, frame_h)
             else:
@@ -669,9 +734,13 @@ def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir):
                     candidates = ", ".join(
                         str(resolved.with_suffix(ext)) for ext in _DIAGRAM_SIBLING_EXTS
                     )
+                    reason = (
+                        "`plantuml` on PATH cannot enforce sandboxing (too old)"
+                        if plantuml_exe else "no `plantuml` on PATH"
+                    )
                     _fail(
-                        "no `plantuml` on PATH and no pre-rendered sibling image "
-                        "for: {}\n  looked for: {}".format(resolved, candidates)
+                        "{} and no pre-rendered sibling image for: {}\n"
+                        "  looked for: {}".format(reason, resolved, candidates)
                     )
                 _verify_diagram_sibling(sibling, resolved)
                 asset_path = sibling
@@ -1351,9 +1420,15 @@ def build(args):
                 result = pisa.CreatePDF(
                     html, dest=fh, link_callback=lambda uri, rel: assets.get(uri, uri)
                 )
+        # reportlab's warn() always defaults to UserWarning (verified: both call
+        # sites pass no category). Restricting to that excludes ResourceWarning -
+        # e.g. an unclosed temp file finalized mid-render by GC, which depends on
+        # allocation volume rather than content loss and produced a spurious
+        # failure on one real multi-file document.
         warning_messages = [
             str(w.message) for w in caught
-            if not any(b in str(w.message) for b in _BENIGN_LOG)
+            if issubclass(w.category, UserWarning)
+            and not any(b in str(w.message) for b in _BENIGN_LOG)
         ]
         # result.err is a count, but xhtml2pdf 0.2.17 never increments it; the
         # collector (and now warning_messages) is the signal that actually fires.
