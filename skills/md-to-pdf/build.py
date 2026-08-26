@@ -526,6 +526,36 @@ def _fit_png_size(png_path, frame_w_pt, frame_h_pt):
 # helper exists to close.
 _KILL_CLEANUP_TIMEOUT = 10
 
+# The plantuml subprocess currently in flight, if any - there is only ever
+# one at a time, since a build processes diagrams sequentially. Tracked so a
+# foreground Ctrl-C (see the SIGINT handler installed around build()'s
+# diagram loop) can reach it despite it living in its own process group/
+# session, which subprocess.run's own timeout handling cannot do.
+_active_proc = None
+
+
+def _kill_tree(proc):
+    """Force-kill proc and its whole process group/session, best-effort.
+
+    Shared by _run_killing_tree's own timeout path and the Ctrl-C handler
+    below, so there is exactly one place that knows how to reach a whole
+    tree launched into its own group/session (taskkill /F /T on Windows,
+    os.killpg + SIGKILL on POSIX).
+    """
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True, timeout=_KILL_CLEANUP_TIMEOUT,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+
 
 def _run_killing_tree(argv, timeout, text=False, env=None):
     """Like subprocess.run(argv, timeout=timeout, capture_output=True, ...),
@@ -540,6 +570,7 @@ def _run_killing_tree(argv, timeout, text=False, env=None):
     group/session and killing that whole group on timeout closes the pipes
     immediately instead.
     """
+    global _active_proc
     popen_kwargs = {}
     if os.name == "nt":
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -549,28 +580,57 @@ def _run_killing_tree(argv, timeout, text=False, env=None):
         argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=text, env=env, **popen_kwargs,
     )
+    _active_proc = proc
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        if os.name == "nt":
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
             try:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    capture_output=True, timeout=_KILL_CLEANUP_TIMEOUT,
-                )
-            except (OSError, subprocess.TimeoutExpired):
+                proc.communicate(timeout=_KILL_CLEANUP_TIMEOUT)
+            except subprocess.TimeoutExpired:
                 pass
+            raise
+    finally:
+        _active_proc = None
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
+def _forward_sigint_to_active(signum, frame):
+    """SIGINT handler installed around build()'s diagram-processing loop.
+
+    _run_killing_tree's process-group isolation (needed for the whole-tree
+    kill above) also removes the plantuml subprocess from the terminal's
+    job-control group, so a foreground Ctrl-C no longer reaches it on its
+    own - without this handler it survives as an orphan after the build
+    exits.
+
+    POSIX gets a plain SIGINT to the whole group (the child is its own
+    session/group leader, same pid as proc.pid) - the same signal it would
+    have received had it stayed in the default process group, so a
+    well-behaved child (including a real JVM, which treats SIGINT as a
+    normal shutdown request) exits the same way either way.
+
+    Windows has no equivalent: CTRL_C_EVENT cannot be targeted at a
+    different process group at all, and the one signal that can cross a
+    group boundary - CTRL_BREAK_EVENT - is not a JVM shutdown request. A
+    default HotSpot build treats CTRL_BREAK_EVENT as a request to dump all
+    thread stacks and keeps running, which would leave the exact orphan
+    this handler exists to prevent while merely printing a diagnostic dump.
+    So Windows force-kills the whole tree immediately via the same
+    _kill_tree used for a timeout, rather than attempting a signal that
+    would not reliably stop the real-world target.
+    """
+    proc = _active_proc
+    if proc is not None:
+        if os.name == "nt":
+            _kill_tree(proc)
         else:
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                os.killpg(proc.pid, signal.SIGINT)
             except OSError:
                 pass
-        try:
-            proc.communicate(timeout=_KILL_CLEANUP_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            pass
-        raise
-    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+    raise KeyboardInterrupt
 
 
 _PLANTUML_SANDBOX_MIN = (1, 2020, 11)
@@ -614,9 +674,15 @@ def _check_plantuml_sandbox(plantuml_exe, timeout):
     m = _PLANTUML_VERSION_RE.search(output)
     if not m:
         detail = "`{} -version` did not report a usable version".format(plantuml_exe)
+        # Attached regardless of exit code: a broken install that warns on
+        # stderr but still exits 0 (a misconfigured launcher that doesn't
+        # hard-fail) is just as uninformative without this as one that
+        # exits nonzero.
+        snippet = (result.stderr or result.stdout).strip()[:200]
         if result.returncode:
-            snippet = (result.stderr or result.stdout).strip()[:200]
             detail += " (exited {}: {})".format(result.returncode, snippet)
+        elif snippet:
+            detail += ": {}".format(snippet)
         return False, detail
     version = tuple(int(g) for g in m.groups())
     if version < _PLANTUML_SANDBOX_MIN:
@@ -738,6 +804,22 @@ def _verify_diagram_sibling(sibling_path, source_path, plantuml_note=None):
         )
 
 
+@functools.lru_cache(maxsize=None)
+def _note_plantuml_skipped(plantuml_detail):
+    """Print, once per build, that a sibling render was used instead of
+    rendering from source - reached only on the success path, where nothing
+    else tells a user with an already-blessed sibling that upgrading
+    `plantuml` would let them skip blessing entirely. Memoized on the detail
+    string so a document with several diagrams prints this once, not once
+    per diagram.
+    """
+    print(
+        "md-to-pdf: rendering diagram(s) from a pre-rendered sibling - "
+        "`plantuml` on PATH was skipped: {}".format(plantuml_detail),
+        file=sys.stderr,
+    )
+
+
 def _stamp_diagram(sibling_path, source_path):
     """Record `source_path`'s current hash into `sibling_path`, for a
     pre-existing diagram image that predates this hash check and has been
@@ -842,6 +924,8 @@ def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir, probe_tim
                     sibling, resolved,
                     plantuml_note=plantuml_detail if plantuml_exe else None,
                 )
+                if plantuml_exe:
+                    _note_plantuml_skipped(plantuml_detail)
                 asset_path = sibling
                 if sibling.suffix.lower() == ".svg":
                     width_pt, height_pt = _fit_svg_size(sibling, frame_w, frame_h)
@@ -1442,15 +1526,24 @@ def build(args):
     # ceiling regardless of what the user asked for.
     probe_timeout = min(_PLANTUML_PROBE_TIMEOUT, args.timeout)
     render_timeout = min(_PLANTUML_RENDER_TIMEOUT, args.timeout)
-    for src, frag in zip(sources, fragments):
-        if number_level:
-            frag = _number_headings(frag, number_level, counters)
-        frag = _map_images(
-            frag, src.parent, assets, frame_size, diagram_cache_dir,
-            probe_timeout, render_timeout,
-        )
-        frag = _size_table_columns(frag)
-        processed.append(frag)
+    # Installed only for this loop, the only place a plantuml subprocess runs:
+    # _run_killing_tree's process-group isolation otherwise leaves a Ctrl-C
+    # unable to reach it (see _forward_sigint_to_active). Restored before the
+    # unrelated Timer-based render timeout below, which uses interpreter-level
+    # interruption instead and would not be affected either way.
+    prior_sigint = signal.signal(signal.SIGINT, _forward_sigint_to_active)
+    try:
+        for src, frag in zip(sources, fragments):
+            if number_level:
+                frag = _number_headings(frag, number_level, counters)
+            frag = _map_images(
+                frag, src.parent, assets, frame_size, diagram_cache_dir,
+                probe_timeout, render_timeout,
+            )
+            frag = _size_table_columns(frag)
+            processed.append(frag)
+    finally:
+        signal.signal(signal.SIGINT, prior_sigint)
 
     all_headings = [h for frag in processed for h in _extract_headings(frag)]
 
