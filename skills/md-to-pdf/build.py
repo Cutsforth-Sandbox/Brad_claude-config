@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -518,38 +519,117 @@ def _fit_png_size(png_path, frame_w_pt, frame_h_pt):
     return px_w * scale, px_h * scale
 
 
+# Bounds the best-effort kill/drain steps below, so a taskkill that itself
+# hangs (blocked by endpoint-protection software) or a grandchild that
+# survives the kill and never closes its end of the pipe can't turn a bounded
+# timeout back into an unbounded hang - the exact failure mode this whole
+# helper exists to close.
+_KILL_CLEANUP_TIMEOUT = 10
+
+
+def _run_killing_tree(argv, timeout, text=False, env=None):
+    """Like subprocess.run(argv, timeout=timeout, capture_output=True, ...),
+    but a timeout kills the whole process tree, not just the immediate child.
+
+    subprocess.run's own kill-on-timeout only signals the direct child. A
+    real `plantuml` install is normally a wrapper script (.bat on Windows,
+    a shell script elsewhere) launching `java` as a grandchild; killing just
+    the wrapper leaves that grandchild running, still holding the captured
+    stdout/stderr pipes open, so the parent build still blocks well past
+    `timeout` waiting to drain them. Launching into a new process
+    group/session and killing that whole group on timeout closes the pipes
+    immediately instead.
+    """
+    popen_kwargs = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+    proc = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=text, env=env, **popen_kwargs,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True, timeout=_KILL_CLEANUP_TIMEOUT,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        try:
+            proc.communicate(timeout=_KILL_CLEANUP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
 _PLANTUML_SANDBOX_MIN = (1, 2020, 11)
 _PLANTUML_VERSION_RE = re.compile(r"PlantUML version (\d+)\.(\d+)\.(\d+)")
 
+# Matches the render call's own budget below: both are dominated by the same
+# JVM cold start (AV scanning java.exe, a network-mounted profile), and a
+# tighter default here would fail this check on a slow-but-working JVM that
+# the render itself would have tolerated fine.
+_PLANTUML_RENDER_TIMEOUT = 60
+_PLANTUML_PROBE_TIMEOUT = _PLANTUML_RENDER_TIMEOUT
+
+# Both of the above are also capped by --timeout when the user asks for
+# something tighter (see build()'s probe_timeout/render_timeout), so an
+# explicit fast-failure request bounds the whole diagram pipeline, not just
+# one half of it.
+
 
 @functools.lru_cache(maxsize=None)
-def _plantuml_supports_sandbox(plantuml_exe):
-    """Whether this plantuml build actually enforces PLANTUML_SECURITY_PROFILE.
+def _check_plantuml_sandbox(plantuml_exe, timeout):
+    """(ok, detail): whether this plantuml build enforces PLANTUML_SECURITY_PROFILE,
+    and - when it doesn't - why, specifically enough to tell a broken install
+    from a merely old one and to name the actual version threshold.
 
     Support for the env var was added in 1.2020.11 (plantuml/plantuml#1450's
     fix). Confirmed on 1.2020.02: the env var is accepted and silently
     enforces nothing - a real `!include` resolves identically with or without
-    it set. Below that version there is no way to sandbox a `.puml` at all,
-    so _render_diagram refuses rather than rendering under a false sense of
-    isolation. Memoized: called once per distinct plantuml_exe, not once per
-    diagram.
-
-    Timeout matches the actual render below: both are dominated by the same
-    JVM cold start, so a tighter budget here would fail this check on a
-    slow-starting JVM (AV scanning java.exe, a network-mounted profile) that
-    the real render call would have tolerated fine.
+    it set. Below that version there is no way to sandbox a `.puml` at all.
+    Memoized per (plantuml_exe, timeout): called once per distinct pair, not
+    once per diagram.
     """
     try:
-        result = subprocess.run(
-            [plantuml_exe, "-version"], capture_output=True, timeout=60, text=True,
+        result = _run_killing_tree([plantuml_exe, "-version"], timeout, text=True)
+    except OSError as exc:
+        return False, "could not run `{} -version`: {}".format(plantuml_exe, exc)
+    except subprocess.TimeoutExpired:
+        return False, "`{} -version` did not respond within {}s".format(
+            plantuml_exe, timeout
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    m = _PLANTUML_VERSION_RE.search(result.stdout + result.stderr)
-    return bool(m) and tuple(int(g) for g in m.groups()) >= _PLANTUML_SANDBOX_MIN
+    output = result.stdout + result.stderr
+    m = _PLANTUML_VERSION_RE.search(output)
+    if not m:
+        detail = "`{} -version` did not report a usable version".format(plantuml_exe)
+        if result.returncode:
+            snippet = (result.stderr or result.stdout).strip()[:200]
+            detail += " (exited {}: {})".format(result.returncode, snippet)
+        return False, detail
+    version = tuple(int(g) for g in m.groups())
+    if version < _PLANTUML_SANDBOX_MIN:
+        # Displayed from the regex's own raw groups, not the int-converted
+        # `version` tuple: PlantUML's real version strings are zero-padded
+        # ("1.2020.02"), and int("02") -> 2 silently drops that in display.
+        return False, "PlantUML {} predates {} (SANDBOX support) - upgrade to render from source".format(
+            ".".join(m.groups()), ".".join(map(str, _PLANTUML_SANDBOX_MIN))
+        )
+    return True, ""
 
 
-def _render_diagram(source_path, plantuml_exe, cache_dir):
+def _render_diagram(source_path, plantuml_exe, cache_dir, timeout):
     """Render a PlantUML source to SVG via a locally installed `plantuml`,
     cached by source content so a rebuild only re-invokes the binary when the
     source actually changed.
@@ -559,24 +639,16 @@ def _render_diagram(source_path, plantuml_exe, cache_dir):
     the sibling-fallback path below already produces for every diagram this
     skill ships against.
 
-    Runs under a subprocess timeout and PLANTUML_SECURITY_PROFILE=SANDBOX so a
-    `.puml` from any cloned repo cannot use `!include`/`!includeurl` to read
-    local files or reach the network at render time. The env var form is
-    required - PlantUML's `-D` system-property form of this flag is a known,
-    filed no-op (plantuml/plantuml#1450): it accepts the flag and enforces
-    nothing.
+    Runs under a subprocess timeout (capped by --timeout, same as the version
+    probe) and PLANTUML_SECURITY_PROFILE=SANDBOX so a `.puml` from any cloned
+    repo cannot use `!include`/`!includeurl` to read local files or reach the
+    network at render time. The env var form is required - PlantUML's `-D`
+    system-property form of this flag is a known, filed no-op
+    (plantuml/plantuml#1450): it accepts the flag and enforces nothing.
+    Callers must already have confirmed _check_plantuml_sandbox(plantuml_exe,
+    ...) is ok - the only call site (_map_images) does, and duplicating that
+    check here would just be unreachable dead code repeating a stale message.
     """
-    if not _plantuml_supports_sandbox(plantuml_exe):
-        _fail(
-            "installed `plantuml` ({}) does not enforce "
-            "PLANTUML_SECURITY_PROFILE=SANDBOX - support was added in "
-            "1.2020.11, and an older build accepts the env var while "
-            "enforcing nothing, so a `.puml`'s `!include`/`!includeurl` "
-            "would resolve unsandboxed.\n"
-            "  Upgrade plantuml, or remove it from PATH so this diagram "
-            "instead uses a hash-verified pre-rendered sibling image (see "
-            "--stamp-diagram in SKILL.md).".format(plantuml_exe)
-        )
     cache_dir.mkdir(parents=True, exist_ok=True)
     digest = _diagram_source_hash(source_path)
     out_svg = cache_dir / "{}.svg".format(digest)
@@ -589,17 +661,21 @@ def _render_diagram(source_path, plantuml_exe, cache_dir):
     tmp_dir.mkdir(exist_ok=True)
     try:
         try:
-            result = subprocess.run(
+            result = _run_killing_tree(
                 [
                     plantuml_exe, "-tsvg", "--ignore-startuml-filename",
                     "-o", str(tmp_dir.resolve()), str(source_path),
                 ],
-                env=env, capture_output=True, timeout=60,
+                timeout, env=env,
             )
         except subprocess.TimeoutExpired:
             _fail(
-                "diagram render timed out after 60s for {}".format(source_path)
+                "diagram render timed out after {}s for {}".format(timeout, source_path)
             )
+        except OSError as exc:
+            _fail("could not run `{}` to render {}: {}".format(
+                plantuml_exe, source_path, exc
+            ))
         # --ignore-startuml-filename: without it, a source starting with
         # `@startuml Name` makes PlantUML write Name.svg instead of
         # <source_path.stem>.svg, and the check below would report a
@@ -625,23 +701,31 @@ def _find_diagram_sibling(source_path):
     return None
 
 
-def _verify_diagram_sibling(sibling_path, source_path):
+def _verify_diagram_sibling(sibling_path, source_path, plantuml_note=None):
     """_fail unless `sibling_path` carries a hash matching `source_path`'s
     current content - so a pre-rendered diagram can never silently drift from
-    the source it depicts."""
+    the source it depicts.
+
+    plantuml_note, when given, names why a `plantuml` on PATH was skipped in
+    favor of this sibling - otherwise a user with an old or broken install
+    and an unstamped sibling sees a message that never mentions plantuml was
+    involved at all, with no way to know upgrading it is an alternative to
+    the manual blessing step below.
+    """
     data = sibling_path.read_bytes()
     m = _DIAGRAM_HASH_RE.search(data)
     stamp_cmd = "python3 build.py --stamp-diagram {} {}".format(
         sibling_path, source_path
     )
+    note = "\n  (`plantuml` on PATH was skipped: {})".format(plantuml_note) if plantuml_note else ""
     if not m:
         _fail(
             "diagram sibling carries no recorded source hash, so it cannot be "
             "verified against its source and is treated as stale:\n"
             "  sibling: {}\n  source:  {}\n"
             "  once you have confirmed by eye that the sibling matches its "
-            "current source, bless it with:\n    {}".format(
-                sibling_path, source_path, stamp_cmd
+            "current source, bless it with:\n    {}{}".format(
+                sibling_path, source_path, stamp_cmd, note
             )
         )
     if m.group(1).decode() != _diagram_source_hash(source_path):
@@ -650,7 +734,7 @@ def _verify_diagram_sibling(sibling_path, source_path):
             "match the current source:\n  sibling: {}\n  source:  {}\n"
             "  regenerate it (with `plantuml` on PATH) or, once you have "
             "confirmed by eye that the sibling now matches, re-bless it "
-            "with:\n    {}".format(sibling_path, source_path, stamp_cmd)
+            "with:\n    {}{}".format(sibling_path, source_path, stamp_cmd, note)
         )
 
 
@@ -677,7 +761,7 @@ def _stamp_diagram(sibling_path, source_path):
     print("md-to-pdf: stamped {} with {}'s current hash".format(sibling_path, source_path))
 
 
-def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir):
+def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir, probe_timeout, render_timeout):
     """Route every local <img src> through an opaque key served by link_callback.
 
     xhtml2pdf resolves a callback's return value as a filesystem path and skips
@@ -720,13 +804,23 @@ def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir):
                         resolved, uri
                     )
                 )
-            # A plantuml too old to enforce PLANTUML_SECURITY_PROFILE=SANDBOX
-            # (_plantuml_supports_sandbox) is treated the same as no plantuml
-            # at all, falling back to the sibling path rather than _fail-ing
-            # outright - a hash-verified sibling never executes the untrusted
-            # `.puml`, so this doesn't reopen what that check exists to close.
-            if plantuml_exe and _plantuml_supports_sandbox(plantuml_exe):
-                asset_path = _render_diagram(resolved, plantuml_exe, diagram_cache_dir)
+            # Checked here, not once up front for the whole file: a document
+            # with no diagram reference should never pay this subprocess cost
+            # at all. _check_plantuml_sandbox is memoized, so a second diagram
+            # in the same build reuses the first check's result.
+            plantuml_ok, plantuml_detail = (
+                _check_plantuml_sandbox(plantuml_exe, probe_timeout)
+                if plantuml_exe else (False, "")
+            )
+            # A plantuml too old or broken to enforce PLANTUML_SECURITY_PROFILE=
+            # SANDBOX is treated the same as no plantuml at all, falling back
+            # to the sibling path rather than _fail-ing outright - a
+            # hash-verified sibling never executes the untrusted `.puml`, so
+            # this doesn't reopen what the check exists to close.
+            if plantuml_exe and plantuml_ok:
+                asset_path = _render_diagram(
+                    resolved, plantuml_exe, diagram_cache_dir, render_timeout
+                )
                 width_pt, height_pt = _fit_svg_size(asset_path, frame_w, frame_h)
             else:
                 sibling = _find_diagram_sibling(resolved)
@@ -735,14 +829,19 @@ def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir):
                         str(resolved.with_suffix(ext)) for ext in _DIAGRAM_SIBLING_EXTS
                     )
                     reason = (
-                        "`plantuml` on PATH cannot enforce sandboxing (too old)"
+                        "`plantuml` on PATH cannot enforce sandboxing ({})".format(
+                            plantuml_detail
+                        )
                         if plantuml_exe else "no `plantuml` on PATH"
                     )
                     _fail(
                         "{} and no pre-rendered sibling image for: {}\n"
                         "  looked for: {}".format(reason, resolved, candidates)
                     )
-                _verify_diagram_sibling(sibling, resolved)
+                _verify_diagram_sibling(
+                    sibling, resolved,
+                    plantuml_note=plantuml_detail if plantuml_exe else None,
+                )
                 asset_path = sibling
                 if sibling.suffix.lower() == ".svg":
                     width_pt, height_pt = _fit_svg_size(sibling, frame_w, frame_h)
@@ -1338,10 +1437,18 @@ def build(args):
     assets = {}
     counters = []
     processed = []
+    # Both capped at --timeout too, so a hung `plantuml` - whether the hang is
+    # in the version probe or the render itself - can't wait out a fixed
+    # ceiling regardless of what the user asked for.
+    probe_timeout = min(_PLANTUML_PROBE_TIMEOUT, args.timeout)
+    render_timeout = min(_PLANTUML_RENDER_TIMEOUT, args.timeout)
     for src, frag in zip(sources, fragments):
         if number_level:
             frag = _number_headings(frag, number_level, counters)
-        frag = _map_images(frag, src.parent, assets, frame_size, diagram_cache_dir)
+        frag = _map_images(
+            frag, src.parent, assets, frame_size, diagram_cache_dir,
+            probe_timeout, render_timeout,
+        )
         frag = _size_table_columns(frag)
         processed.append(frag)
 

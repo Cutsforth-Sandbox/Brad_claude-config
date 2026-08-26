@@ -26,11 +26,12 @@ Windows' app-execution-alias stub standing in for a Python that isn't there — 
 
 ## First run
 
-The first run on a given interpreter installs `markdown` and `xhtml2pdf` into
-`_deps/` beside the script: roughly a minute and 70 MB, announced before it
-starts. Later runs take about three seconds. The tree is rebuilt automatically
-if the interpreter changes or a package goes missing, so a failed install is
-never cached — nothing needs installing by hand, and `_deps/` is gitignored.
+The first run on a given interpreter installs the skill's pinned Python
+dependencies into `_deps/` beside the script: roughly a minute and 70 MB,
+announced before it starts. Later runs take about three seconds. The tree is
+rebuilt automatically if the interpreter changes or a package goes missing,
+so a failed install is never cached — nothing needs installing by hand, and
+`_deps/` is gitignored.
 
 ## What the defaults decide
 
@@ -72,8 +73,12 @@ treated as a diagram, not a picture:
 
 - If `plantuml` is on `PATH` and new enough to enforce
   `PLANTUML_SECURITY_PROFILE=SANDBOX` (see below), the diagram is rendered from
-  that source on every build (cached by content hash, so an unchanged diagram
-  costs nothing on a rebuild). This path needs a `plantuml` install to
+  that source on every build (cached by content hash, so re-rendering an
+  unchanged diagram costs nothing). Checking whether `plantuml` is new enough
+  is its own, separate cost — a `plantuml -version` call, made once per
+  distinct install per build, only when a diagram is actually referenced.
+  Both that check and the render itself are capped at 60s, and further by
+  `--timeout` when that's tighter. This path needs a `plantuml` install to
   exercise at all.
 - Otherwise — no `plantuml` on `PATH`, or one too old to sandbox — the build
   looks for a pre-rendered `<name>.svg` or `<name>.png` next to the source and
@@ -107,6 +112,12 @@ treated as a diagram, not a picture:
   exists to close. Only when there's no usable sibling either does the build
   fail, naming the reason. Upgrading `plantuml` is the only way to render
   from source on a machine whose install is this old.
+- A hung `plantuml` — including a wrapper script (its usual shape: a `.bat`
+  or shell launcher around `java`) whose actual work happens in a child
+  process — is killed as a whole tree, not just the immediate process, on
+  both the version check and the render itself. Killing only the wrapper
+  leaves that child running and holding the captured output open, so the
+  build would otherwise still block well past its stated timeout.
 - The render cache lives in `_diagrams/` beside `_deps/` and is gitignored,
   same as `_deps/`.
 
