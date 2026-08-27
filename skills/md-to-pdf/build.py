@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import _thread
+import time
 import warnings
 from pathlib import Path
 
@@ -596,6 +597,24 @@ def _run_killing_tree(argv, timeout, text=False, env=None):
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
+# How long to give a plain SIGINT to work on POSIX before escalating to a
+# force-kill - generous next to the 0.085s measured for a real PlantUML JVM
+# shutting down from SIGINT, short enough that even the rare escalation
+# stays well inside a user's patience for Ctrl-C to take effect.
+_SIGINT_GRACE_S = 0.5
+
+# Sending a signal from inside a Python signal handler doesn't block that
+# same signal from arriving again and re-entering this handler - CPython's
+# handler runs the Python callback outside the OS-level signal-blocked
+# window, and a poll loop's time.sleep is exactly the kind of syscall that
+# gets interrupted and re-checked for a pending signal. Without this flag, a
+# second Ctrl-C landing mid-poll would just restart the wait from a fresh
+# deadline instead of hastening the kill - the opposite of what mashing
+# Ctrl-C harder should do. Set for the duration of one handler invocation's
+# own wait; a re-entrant call sees it set and escalates immediately instead.
+_sigint_escalating = False
+
+
 def _forward_sigint_to_active(signum, frame):
     """SIGINT handler installed around build()'s diagram-processing loop.
 
@@ -609,27 +628,47 @@ def _forward_sigint_to_active(signum, frame):
     session/group leader, same pid as proc.pid) - the same signal it would
     have received had it stayed in the default process group, so a
     well-behaved child (including a real JVM, which treats SIGINT as a
-    normal shutdown request) exits the same way either way.
+    normal shutdown request) exits the same way either way. A child that
+    traps or ignores SIGINT would otherwise survive indefinitely - nothing
+    else ever re-checks it - so this waits up to _SIGINT_GRACE_S for it to
+    actually exit and force-kills it the same way a timeout would if it
+    hasn't. A second SIGINT arriving while that wait is still in progress
+    (see _sigint_escalating) skips straight to the force-kill rather than
+    resending SIGINT and restarting the wait.
 
-    Windows has no equivalent: CTRL_C_EVENT cannot be targeted at a
-    different process group at all, and the one signal that can cross a
-    group boundary - CTRL_BREAK_EVENT - is not a JVM shutdown request. A
-    default HotSpot build treats CTRL_BREAK_EVENT as a request to dump all
-    thread stacks and keeps running, which would leave the exact orphan
-    this handler exists to prevent while merely printing a diagnostic dump.
-    So Windows force-kills the whole tree immediately via the same
+    Windows has no equivalent signal to send: CTRL_C_EVENT cannot be
+    targeted at a different process group at all, and the one signal that
+    can cross a group boundary - CTRL_BREAK_EVENT - is not a JVM shutdown
+    request. A default HotSpot build treats CTRL_BREAK_EVENT as a request to
+    dump all thread stacks and keeps running, which would leave the exact
+    orphan this handler exists to prevent while merely printing a diagnostic
+    dump. So Windows force-kills the whole tree immediately via the same
     _kill_tree used for a timeout, rather than attempting a signal that
-    would not reliably stop the real-world target.
+    would not reliably stop the real-world target - there is no "wait and
+    see" phase to have on this branch, so no re-entrancy concern either.
     """
+    global _sigint_escalating
     proc = _active_proc
     if proc is not None:
         if os.name == "nt":
+            _kill_tree(proc)
+        elif _sigint_escalating:
             _kill_tree(proc)
         else:
             try:
                 os.killpg(proc.pid, signal.SIGINT)
             except OSError:
                 pass
+            else:
+                _sigint_escalating = True
+                try:
+                    deadline = time.monotonic() + _SIGINT_GRACE_S
+                    while proc.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    if proc.poll() is None:
+                        _kill_tree(proc)
+                finally:
+                    _sigint_escalating = False
     raise KeyboardInterrupt
 
 
@@ -806,12 +845,14 @@ def _verify_diagram_sibling(sibling_path, source_path, plantuml_note=None):
 
 @functools.lru_cache(maxsize=None)
 def _note_plantuml_skipped(plantuml_detail):
-    """Print, once per build, that a sibling render was used instead of
+    """Print, once per process, that a sibling render was used instead of
     rendering from source - reached only on the success path, where nothing
     else tells a user with an already-blessed sibling that upgrading
     `plantuml` would let them skip blessing entirely. Memoized on the detail
-    string so a document with several diagrams prints this once, not once
-    per diagram.
+    string, so a document with several diagrams prints this once, not once
+    per diagram - and once per process rather than strictly once per build,
+    since the underlying `lru_cache` is never cleared, though this tool is
+    never invoked more than once per process anyway.
     """
     print(
         "md-to-pdf: rendering diagram(s) from a pre-rendered sibling - "
