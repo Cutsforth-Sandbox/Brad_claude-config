@@ -278,6 +278,12 @@ def _page_css(page_size, want_cover, want_footer):
     return cover + body
 
 
+# th/td's own horizontal padding. Named here, not just inlined into BASE_CSS
+# below, so _COL_PADDING_RESERVE_PT (_size_table_columns's column-width
+# floor) stays tied to what this CSS actually charges, rather than two
+# independent numbers that happen to agree.
+_CELL_PADDING_LR_PT = 6.0
+
 BASE_CSS = """
 body { font-family: "DejaVuSans", sans-serif; font-size: 10pt; line-height: 1.4; }
 h1, h2, h3 { font-weight: normal; }
@@ -300,8 +306,8 @@ h3 { font-size: 13pt; margin-top: 16pt; page-break-after: avoid; -pdf-keep-with-
    or fewer rows) gets the same protection headings have, via an inline
    -pdf-keep-with-next added per-table in _size_table_columns rather than
    here, since the decision depends on that table's own row count. */
-table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 10pt 0; page-break-inside: avoid; }
-th, td { border: none; border-bottom: 1px solid #999; padding: 4pt 10pt; text-align: left; font-size: 10pt; word-wrap: break-word; }
+table { border-collapse: collapse; width: 100%; margin: 10pt 0; page-break-inside: avoid; }
+th, td { border: none; border-bottom: 1px solid #999; padding: 4pt __CELL_PAD_LR__pt; text-align: left; font-size: 10pt; }
 th { font-weight: bold; border-bottom: 2px solid #000; }
 code { color: #c8ae74; font-family: "DejaVuSansMono", monospace; font-size: 11pt; }
 pre { background-color: #f2f2f2; padding: 6pt; font-family: "DejaVuSansMono", monospace; font-size: 8pt; }
@@ -337,7 +343,7 @@ td.toc-t { width: 92%; }
 td.toc-l0 { font-size: 11pt; padding-top: 7pt; }
 td.toc-l1 { font-size: 10pt; padding-left: 18pt; }
 td.toc-l2 { font-size: 9pt; padding-left: 36pt; color: #444; }
-"""
+""".replace("__CELL_PAD_LR__", "{:g}".format(_CELL_PADDING_LR_PT))
 
 
 def _strip_at_page(css, source):
@@ -999,68 +1005,206 @@ def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir, probe_tim
     return _IMG_TAG_RE.sub(fix_tag, html)
 
 
-MIN_COL_PCT = 15.0
-_CODE_WEIGHT = 1.15
 _TAG_RE = re.compile(r"<[^>]+>")
 
-# -pdf-keep-with-next on a table forces reportlab into a repeated whole-table
-# refitting attempt that is quadratic in row count. Measured directly against
-# this file's own generated markup (table-layout:fixed plus the per-cell
-# widths _size_table_columns adds - a plainer table is far more forgiving, so
-# calibrating against anything less than the real output understates the
-# cost): a 20-table document renders in 1.35s per table at 12 rows, and does
-# not finish in 15s at 13. This threshold sits with a solid margin below that
-# cliff - confirmed safe even at 40 tables (double the calibration load) - so
-# a small table still gets the same header-orphan protection headings have,
-# while a large one accepts a rare mid-table split rather than the
-# catastrophic refit.
+# -pdf-keep-with-next on a table can force reportlab into a repeated
+# whole-table refitting attempt that is quadratic in row count - measured
+# directly against this file's own generated markup (the per-cell widths
+# _size_table_columns adds, since a plainer table is far more forgiving and
+# understates the cost). Re-measured against the real font-metric column
+# sizing above: a 20-table document stays comfortably sub-linear per table
+# through 100 rows (well past any table size this threshold actually gates),
+# with no cliff found in that range - a wider margin than this threshold
+# strictly needs, so it is left at 10 rather than raised on the strength of
+# a margin that could still narrow for some other content shape. A small
+# table still gets the same header-orphan protection headings have, while a
+# large one accepts a rare mid-table split rather than a refit search.
 TABLE_KEEP_TOGETHER_MAX_ROWS = 10
 _TABLE_OPEN_RE = re.compile(r"^<table([^>]*)>", re.I)
 
+# A column's own padding is consumed twice: once by reportlab's table-cell
+# geometry (LEFTPADDING/RIGHTPADDING), and again inside xhtml2pdf's forked
+# PmlParagraph.wrap, which copies the same CSS padding onto the cell's own
+# paragraph style and subtracts it a second time before wrapping text -
+# confirmed by reading PmlParagraph.wrap directly. A column narrower than its
+# widest unbreakable word plus this reserve cannot render without its content
+# overflowing onto the next column: xhtml2pdf never parses `word-wrap`, the
+# forked Paragraph has no long-word force-split, and reportlab's own
+# KeepInFrame(mode="shrink") can't engage either (a separate clamp reports
+# the wrapped width as unchanged regardless of what actually overflowed).
+_COL_PADDING_RESERVE_PT = 4 * _CELL_PADDING_LR_PT
 
-def _cell_text_width(cell_html):
-    """Rough relative width of a cell's content, in "character units".
+# Absorbs the rounding between the point-math below and the inline
+# `width:NN.N%` (one decimal place) it eventually gets written as and
+# xhtml2pdf re-expands against the frame. Each column's own percentage
+# carries up to 0.05 percentage points of rounding independently - about
+# 0.28pt on the widest frame this file supports (letter, 554.4pt) - so the
+# reserve scales with column count rather than being one flat amount,
+# otherwise a table with several columns pinned right at their floor could
+# still have one of them round back under it after that round trip.
+_COL_FIT_SAFETY_PT_PER_COL = 0.3
 
-    Monospace inline code renders noticeably wider per character than the
-    proportional body font at the same point size, so it is weighted up before
-    being compared to plain text.
+# Must track BASE_CSS's own `th, td { ... font-size: 10pt }` and
+# `code { ... font-size: 11pt }` - there is no live link from that CSS text
+# to these, so a font-size change there needs the same change here.
+_SIZE_BODY_PT = 10.0
+_SIZE_CODE_PT = 11.0
+
+# Must match the keys FONT_FILES registers with pdfmetrics.
+_FONT_PLAIN = "DejaVuSans"
+_FONT_BOLD = "DejaVuSans-Bold"
+_FONT_ITALIC = "DejaVuSans-Oblique"
+_FONT_MONO = "DejaVuSansMono"
+
+_CELL_RUN_SPLIT_RE = re.compile(r"(<[^>]+>)")
+_CELL_STYLE_TAG_RE = re.compile(r"<\s*(/?)\s*(strong|b|em|i|code|br)\b[^>]*?/?>", re.I)
+_CELL_STYLE_ALIAS = {"strong": "b", "b": "b", "em": "i", "i": "i", "code": "code"}
+# A literal space only, not \s+: a non-breaking space (from &nbsp;, e.g.
+# gluing a value to its unit) must NOT split a run here, confirmed by
+# reading both the real renderer's own word-break logic - stock reportlab's
+# line breaker explicitly excludes U+00A0 from its break-whitespace set, and
+# the xhtml2pdf fork's own split() takes the same path when called with an
+# explicit " " delimiter, as it always is for line breaking - so a cell
+# using &nbsp; to join two tokens renders, and must measure, as one
+# unbreakable run, not two independently-narrower ones.
+_CELL_WORD_SPLIT_RE = re.compile(r"( +)")
+
+
+def _resolve_run_font(is_th, bold, italic, mono):
+    """(font_name, size_pt) for one text run, matching what the renderer
+    actually draws.
+
+    `mono` wins outright regardless of is_th/bold/italic: DejaVuSansMono has
+    no separate bold or italic file registered, and confirmed directly (a
+    live pdfmetrics/tt2ps lookup against this skill's own font registration)
+    that resolving it with bold or italic requested falls back to plain
+    DejaVuSansMono rather than a synthesized or missing variant - so a
+    `<code>` run inside `<th>`/`<strong>`/`<em>` renders, and must measure,
+    as plain mono.
+
+    Bold wins over italic when both apply (e.g. `<th><em>...</em></th>`):
+    `_register_fonts` registers no separate bold-italic face, mapping
+    `boldItalic="DejaVuSans-Bold"` - confirmed directly that reportlab's own
+    `tt2ps` resolves bold+italic to plain Bold, dropping italic, so
+    measuring it any other way would disagree with what actually renders.
     """
-    text = _TAG_RE.sub("", cell_html).strip()
-    weight = _CODE_WEIGHT if "<code>" in cell_html else 1.0
-    return len(text) * weight
+    if mono:
+        return _FONT_MONO, _SIZE_CODE_PT
+    if bold or is_th:
+        return _FONT_BOLD, _SIZE_BODY_PT
+    if italic:
+        return _FONT_ITALIC, _SIZE_BODY_PT
+    return _FONT_PLAIN, _SIZE_BODY_PT
 
 
-def _distribute(widths):
-    """Column percentages summing to 100, with a floor no column drops below.
+def _cell_text_metrics(cell_html, is_th):
+    """(proportional_pt, widest_word_pt): a cell's rendered content in real
+    point-widths, not character counts.
 
-    The floor is half the equal share, so it protects a narrow column without
-    pinning every column to the same width once a table has enough of them.
-    Raising a narrow column to the floor is paid for by scaling the columns
-    above it, repeated until every column clears the floor.
+    proportional_pt is the sum of every text run's real stringWidth, each in
+    its own resolved font/size - used only to divide up whatever frame width
+    is left after every column's own floor (below) is satisfied.
+
+    widest_word_pt is the width of the cell's single widest unbreakable
+    run - a hard floor, since nothing downstream can wrap or clip an
+    over-wide word (see _COL_PADDING_RESERVE_PT's comment). A run glued to
+    the next across a tag boundary with no whitespace between them (e.g.
+    "pre<code>fix</code>") is one word, not two: each sub-run keeps its own
+    font for its own width contribution, but the widths are summed rather
+    than compared separately, since the rendered glyph run really is one
+    unbroken unit.
     """
-    n = len(widths)
+    from reportlab.pdfbase import pdfmetrics  # local: see _fit_svg_size/_fit_png_size
+
+    open_tags = []
+    total_pt = 0.0
+    widest_pt = 0.0
+    run_pt = 0.0
+    run_open = False
+
+    def flush_run():
+        nonlocal run_pt, run_open, widest_pt
+        if run_open:
+            widest_pt = max(widest_pt, run_pt)
+        run_pt, run_open = 0.0, False
+
+    for chunk in _CELL_RUN_SPLIT_RE.split(cell_html):
+        if not chunk:
+            continue
+        if chunk[0] == "<":
+            m = _CELL_STYLE_TAG_RE.match(chunk)
+            if not m:
+                continue  # any other tag is transparent: no font/word-break effect
+            name = m.group(2).lower()
+            if name == "br":
+                flush_run()
+                continue
+            tag = _CELL_STYLE_ALIAS[name]
+            if m.group(1):  # closing tag: drop the most recently opened match
+                if tag in open_tags:
+                    del open_tags[len(open_tags) - 1 - open_tags[::-1].index(tag)]
+            else:
+                open_tags.append(tag)
+            continue
+
+        text = html.unescape(chunk)
+        font, size = _resolve_run_font(
+            is_th, "b" in open_tags, "i" in open_tags, "code" in open_tags
+        )
+        for i, part in enumerate(_CELL_WORD_SPLIT_RE.split(text)):
+            if not part:
+                continue
+            if part.isspace():
+                flush_run()
+                continue
+            width = pdfmetrics.stringWidth(part, font, size)
+            total_pt += width
+            if i == 0 and run_open:
+                run_pt += width  # glued to the previous run's tail, no whitespace between
+            else:
+                flush_run()
+                run_pt = width
+            run_open = True
+    flush_run()
+    return total_pt, widest_pt
+
+
+def _solve_column_widths(proportional, floors, frame_w_pt):
+    """Column widths in points, summing to frame_w_pt, honoring each
+    column's own floor - or None if the floors alone can't all be honored,
+    before any slack is even distributed.
+
+    proportional: each column's share of whatever space is left after every
+    floor is satisfied, as a real point-width sum. floors: each column's
+    hard minimum - a column is never sized below this regardless of its own
+    proportional share. Raising a column to its floor is paid for by
+    scaling the columns above their own floor, repeated until every column
+    clears its floor.
+    """
+    n = len(proportional)
     if n == 0:
         return []
-    floor = min(MIN_COL_PCT, 100.0 / n * 0.5)
-    total = sum(widths)
-    if total <= 0:
-        return [100.0 / n] * n
-    pct = [w / total * 100.0 for w in widths]
+    if sum(floors) > frame_w_pt - n * _COL_FIT_SAFETY_PT_PER_COL:
+        return None
 
+    total = sum(proportional)
+    widths = (
+        [frame_w_pt / n] * n if total <= 0
+        else [p / total * frame_w_pt for p in proportional]
+    )
     for _ in range(n):
-        below = [i for i, p in enumerate(pct) if p < floor]
+        below = [i for i in range(n) if widths[i] < floors[i]]
         if not below:
             break
-        above = [i for i, p in enumerate(pct) if p > floor]
-        headroom = sum(pct[i] - floor for i in above)
-        deficit = sum(floor - pct[i] for i in below)
-        if headroom <= 0 or deficit > headroom:
-            return [100.0 / n] * n
+        above = [i for i in range(n) if widths[i] > floors[i]]
+        headroom = sum(widths[i] - floors[i] for i in above)
+        deficit = sum(floors[i] - widths[i] for i in below)
+        take = min(deficit, headroom) if headroom > 0 else 0.0
         for i in below:
-            pct[i] = floor
+            widths[i] = floors[i]
         for i in above:
-            pct[i] -= deficit * (pct[i] - floor) / headroom
-    return pct
+            widths[i] -= take * (widths[i] - floors[i]) / headroom
+    return widths
 
 
 _ROW_RE = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.S | re.I)
@@ -1069,20 +1213,28 @@ _STYLE_RE = re.compile(r"(\bstyle\s*=\s*[\"'])", re.I)
 _SPAN_RE = re.compile(r"\b(?:col|row)span\s*=", re.I)
 
 
-def _size_table_columns(html):
+def _size_table_columns(html, frame_w_pt, source_name):
     """Give every table's columns widths sized to their own contents.
 
-    xhtml2pdf renders all columns equal-width unless the table is
-    `table-layout: fixed` *and* carries explicit widths, so without this each
-    table splits evenly regardless of how narrow its first column really is.
-    Widths go on the cells: colgroup/col are ignored by xhtml2pdf's table
-    layout, and `table-layout: fixed` sizes from the first row.
+    xhtml2pdf renders all columns equal-width by default: `table { width:
+    100% }` reaches sizing through its own HTML-width-attribute path, and
+    `PmlTable.wrap`'s own distribute-remaining-space loop then splits that
+    100% evenly absent other information. Widths go on the cells: colgroup/col
+    are ignored by xhtml2pdf's table layout.
 
     Tables using colspan or rowspan are left alone - a per-cell width means
     nothing once cells span columns.
+
+    frame_w_pt is the page's content width in points (`_content_frame_size`'s
+    first element) - real font-metric measurement needs to know how much
+    room there actually is. source_name is only for the failure message
+    below.
     """
+    table_idx = [0]
 
     def size_table(table_match):
+        table_idx[0] += 1
+        idx = table_idx[0]
         table_html = table_match.group(0)
         # A non-greedy <table>...</table> stops at the *inner* closing tag of a
         # nested table, which would mix two tables' cells into one width
@@ -1110,15 +1262,43 @@ def _size_table_columns(html):
         if ncols < 2:
             return table_html
 
-        widths = []
-        for col in range(ncols):
-            widths.append(
-                max(
-                    (_cell_text_width(cells[col][2]) for _, cells in rows if len(cells) > col),
-                    default=0.0,
+        col_prop = [0.0] * ncols
+        col_word = [0.0] * ncols
+        for _, cells in rows:
+            for col, cell in enumerate(cells):
+                if col >= ncols:
+                    break
+                is_th = cell[0].lower() == "th"
+                prop, word = _cell_text_metrics(cell[2], is_th)
+                if prop > col_prop[col]:
+                    col_prop[col] = prop
+                if word > col_word[col]:
+                    col_word[col] = word
+        col_floor = [w + _COL_PADDING_RESERVE_PT for w in col_word]
+
+        widths_pt = _solve_column_widths(col_prop, col_floor, frame_w_pt)
+        if widths_pt is None:
+            per_col = "\n".join(
+                "    column {}: {:.0f}pt minimum".format(i + 1, f)
+                for i, f in enumerate(col_floor)
+            )
+            _fail(
+                "table #{idx} in {src} ({ncols} columns) cannot fit inside "
+                "the {avail:.0f}pt content width: its columns' own minimum "
+                "widths (widest unbreakable word/token per column, plus "
+                "{pad:.0f}pt padding reserve) add up to {need:.0f}pt, "
+                "{over:.0f}pt more than the page allows:\n{per_col}\n"
+                "  Options: shorten the longest word/token in the tightest "
+                "column(s) above, reduce the number of columns, use "
+                "--page-size a4 for a wider page, or use --css to shrink "
+                "table padding/font-size, e.g.:\n"
+                "    td, th {{ font-size: 8pt; padding: 2pt 4pt; }}".format(
+                    idx=idx, src=source_name, ncols=ncols, avail=frame_w_pt,
+                    pad=_COL_PADDING_RESERVE_PT, need=sum(col_floor),
+                    over=sum(col_floor) - frame_w_pt, per_col=per_col,
                 )
             )
-        pct = _distribute(widths)
+        pct = [w / frame_w_pt * 100.0 for w in widths_pt]
 
         def rewrite_row(row_match):
             inner = row_match.group(1)
@@ -1145,6 +1325,49 @@ def _size_table_columns(html):
         return _ROW_RE.sub(rewrite_row, table_html)
 
     return re.sub(r"<table\b.*?</table>", size_table, html, flags=re.S | re.I)
+
+
+def _fill_empty_rows(html):
+    """Give a genuinely all-empty table row something to render.
+
+    A blank Markdown table row becomes `<td></td>` with no content at all -
+    no line box, so the row collapses to CSS padding alone (confirmed:
+    ~7pt tall versus ~29pt for the same row with even one character of
+    text). `min-height` would be a dead no-op here, same as the CSS
+    properties `_size_table_columns` no longer relies on - `&nbsp;` needs no
+    computed value and renders the same line height a person filling the row
+    in by hand would produce anyway. Runs on every table, including ones
+    `_size_table_columns` itself skips for colspan/rowspan - an empty row is
+    possible in either.
+
+    Matches `_size_table_columns` in bailing out of a table containing a
+    nested `<table>`, for the same reason: a non-greedy `<tr>...</tr>` match
+    stops at the *inner* table's own closing tag, not the outer row's, which
+    would otherwise corrupt the outer table's structure rather than leave it
+    alone.
+    """
+
+    def fill_table(table_match):
+        table_html = table_match.group(0)
+        if "<table" in table_html[6:].lower():
+            return table_html
+
+        def fill_row(row_match):
+            row_html = row_match.group(0)
+            cells = _CELL_RE.findall(row_html)
+            if not cells or any(_TAG_RE.sub("", body).strip() for _, _, body in cells):
+                return row_html
+
+            def fill_cell(cell_match):
+                tag = cell_match.group(1)
+                attrs = cell_match.group(2) or ""
+                return "<{0}{1}>&nbsp;</{0}>".format(tag, attrs)
+
+            return _CELL_RE.sub(fill_cell, row_html)
+
+        return _ROW_RE.sub(fill_row, table_html)
+
+    return re.sub(r"<table\b.*?</table>", fill_table, html, flags=re.S | re.I)
 
 
 # --------------------------------------------------------------------------
@@ -1581,7 +1804,8 @@ def build(args):
                 frag, src.parent, assets, frame_size, diagram_cache_dir,
                 probe_timeout, render_timeout,
             )
-            frag = _size_table_columns(frag)
+            frag = _fill_empty_rows(frag)
+            frag = _size_table_columns(frag, frame_size[0], str(src))
             processed.append(frag)
     finally:
         signal.signal(signal.SIGINT, prior_sigint)

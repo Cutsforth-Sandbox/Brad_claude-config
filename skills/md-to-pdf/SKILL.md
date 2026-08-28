@@ -133,10 +133,15 @@ treated as a diagram, not a picture:
   `page-break-inside`, so the only real page-break control it has is
   `-pdf-keep-with-next`, used here on headings, on a figure's image (to hold
   it with its caption), and per-table on a table of 10 rows or fewer. A larger
-  table carries no such protection: forcing it on any table hangs for minutes
-  on a real document (measured: over 90 seconds on a 60-row table, where the
-  same document renders in under 4 seconds without it) — a rare split table on
-  a large one is a far smaller cost than that.
+  table carries no such protection, as a safety margin against a reportlab
+  refit search that is quadratic in row count for some table content
+  shapes — a rare split table on a large one is a smaller cost than risking
+  that.
+- **Cell text is measured with the actual fonts and point sizes**, word by
+  word, not counted as characters — a column is never sized narrower than its
+  own widest unbreakable word plus padding. A table whose columns still can't
+  all fit even at their own minimum width fails the build with the shortfall
+  and each column's minimum, rather than rendering with columns overlapping.
 - **Images are resolved per source file**, against that file's own directory, so
   inputs from different folders each keep their own relative paths working. A
   missing image is a hard error naming both the reference and the resolved path;
@@ -145,6 +150,8 @@ treated as a diagram, not a picture:
   a remote one means the build makes a network request.
 - **Tables using `colspan` or `rowspan` keep xhtml2pdf's equal column widths.**
   Every other table gets widths sized to its own content.
+- **A table row with every cell blank renders with a normal line height**,
+  not collapsed to padding alone — useful for a fill-in-by-hand template row.
 - Headings become PDF bookmarks automatically.
 
 `result.err`, xhtml2pdf's nominal error count, is **always zero** in 0.2.17 — it
