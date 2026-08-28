@@ -479,6 +479,14 @@ def _diagram_source_hash(source_path):
     return hashlib.sha256(source_path.read_bytes()).hexdigest()
 
 
+def _scale_to_fit(w, h, frame_w_pt, frame_h_pt):
+    """(w, h) scaled down to fit inside a frame_w_pt x frame_h_pt box,
+    preserving aspect ratio - shared by _fit_svg_size/_fit_png_size, which
+    differ only in how w/h are obtained and validated."""
+    scale = min(frame_w_pt / w, frame_h_pt / h)
+    return w * scale, h * scale
+
+
 def _fit_svg_size(svg_path, frame_w_pt, frame_h_pt):
     """(width_pt, height_pt) fitting an SVG's own intrinsic size into a
     frame_w_pt x frame_h_pt box, preserving aspect ratio.
@@ -505,8 +513,7 @@ def _fit_svg_size(svg_path, frame_w_pt, frame_h_pt):
                 svg_path
             )
         )
-    scale = min(frame_w_pt / drawing.width, frame_h_pt / drawing.height)
-    return drawing.width * scale, drawing.height * scale
+    return _scale_to_fit(drawing.width, drawing.height, frame_w_pt, frame_h_pt)
 
 
 def _fit_png_size(png_path, frame_w_pt, frame_h_pt):
@@ -522,8 +529,7 @@ def _fit_png_size(png_path, frame_w_pt, frame_h_pt):
         _fail("diagram sibling is not a readable image: {}".format(png_path))
     if px_w <= 0 or px_h <= 0:
         _fail("diagram has no usable size (width or height is 0): {}".format(png_path))
-    scale = min(frame_w_pt / px_w, frame_h_pt / px_h)
-    return px_w * scale, px_h * scale
+    return _scale_to_fit(px_w, px_h, frame_w_pt, frame_h_pt)
 
 
 # Bounds the best-effort kill/drain steps below, so a taskkill that itself
@@ -708,22 +714,32 @@ def _check_plantuml_sandbox(plantuml_exe, timeout):
     once per diagram.
     """
     try:
-        result = _run_killing_tree([plantuml_exe, "-version"], timeout, text=True)
+        # Not text=True: a real version banner can carry a byte outside the
+        # OS's default codepage (locale-specific text in a GPL/copyright
+        # blurb, or a launcher wrapper's own banner), which subprocess's
+        # internal text-mode decoding cannot recover from - the failure
+        # surfaces from a reader thread, not as a catchable exception here,
+        # leaving stdout/stderr as None and crashing the next line instead
+        # of falling back to the sibling-image path this function exists to
+        # enable. Decoding with "replace" (matching _render_diagram's own
+        # call) tolerates it.
+        result = _run_killing_tree([plantuml_exe, "-version"], timeout)
     except OSError as exc:
         return False, "could not run `{} -version`: {}".format(plantuml_exe, exc)
     except subprocess.TimeoutExpired:
         return False, "`{} -version` did not respond within {}s".format(
             plantuml_exe, timeout
         )
-    output = result.stdout + result.stderr
-    m = _PLANTUML_VERSION_RE.search(output)
+    out_text = result.stdout.decode("utf-8", "replace")
+    err_text = result.stderr.decode("utf-8", "replace")
+    m = _PLANTUML_VERSION_RE.search(out_text + err_text)
     if not m:
         detail = "`{} -version` did not report a usable version".format(plantuml_exe)
         # Attached regardless of exit code: a broken install that warns on
         # stderr but still exits 0 (a misconfigured launcher that doesn't
         # hard-fail) is just as uninformative without this as one that
         # exits nonzero.
-        snippet = (result.stderr or result.stdout).strip()[:200]
+        snippet = (err_text or out_text).strip()[:200]
         if result.returncode:
             detail += " (exited {}: {})".format(result.returncode, snippet)
         elif snippet:
@@ -890,7 +906,7 @@ def _stamp_diagram(sibling_path, source_path):
     print("md-to-pdf: stamped {} with {}'s current hash".format(sibling_path, source_path))
 
 
-def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir, probe_timeout, render_timeout):
+def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir, probe_timeout, render_timeout, plantuml_exe):
     """Route every local <img src> through an opaque key served by link_callback.
 
     xhtml2pdf resolves a callback's return value as a filesystem path and skips
@@ -905,11 +921,14 @@ def _map_images(html, base_dir, assets, frame_size, diagram_cache_dir, probe_tim
     against the source, so a diagram can never silently drift from what it
     depicts. Either way the result is wrapped in a captioned figure, using the
     Markdown alt text as the caption.
+
+    plantuml_exe is resolved once in build() rather than once per source file:
+    PATH doesn't change mid-build, so a per-file shutil.which scan would just
+    repeat the same PATH walk for every file in a multi-file document.
     """
     from urllib.parse import unquote
 
     frame_w, frame_h = frame_size
-    plantuml_exe = shutil.which("plantuml")
 
     def fix_tag(tag_match):
         tag = tag_match.group(0)
@@ -1211,6 +1230,17 @@ _ROW_RE = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.S | re.I)
 _CELL_RE = re.compile(r"<(th|td)(\b[^>]*)?>(.*?)</\1>", re.S | re.I)
 _STYLE_RE = re.compile(r"(\bstyle\s*=\s*[\"'])", re.I)
 _SPAN_RE = re.compile(r"\b(?:col|row)span\s*=", re.I)
+_TABLE_BLOCK_RE = re.compile(r"<table\b.*?</table>", re.S | re.I)
+
+
+def _is_nested_table(table_html):
+    """True if a whole <table>...</table> match itself contains another
+    <table> - shared by every pass below that scans one table's rows/cells
+    at a time, since a non-greedy <tr>/<td> match then stops at the *inner*
+    table's own closing tag instead of the outer row's, mixing the two
+    tables' content together.
+    """
+    return "<table" in table_html[6:].lower()
 
 
 def _size_table_columns(html, frame_w_pt, source_name):
@@ -1236,10 +1266,7 @@ def _size_table_columns(html, frame_w_pt, source_name):
         table_idx[0] += 1
         idx = table_idx[0]
         table_html = table_match.group(0)
-        # A non-greedy <table>...</table> stops at the *inner* closing tag of a
-        # nested table, which would mix two tables' cells into one width
-        # calculation.
-        if "<table" in table_html[6:].lower() or _SPAN_RE.search(table_html):
+        if _is_nested_table(table_html) or _SPAN_RE.search(table_html):
             return table_html
         rows = [(m, _CELL_RE.findall(m.group(1))) for m in _ROW_RE.finditer(table_html)]
         rows = [(m, cells) for m, cells in rows if cells]
@@ -1324,7 +1351,7 @@ def _size_table_columns(html, frame_w_pt, source_name):
 
         return _ROW_RE.sub(rewrite_row, table_html)
 
-    return re.sub(r"<table\b.*?</table>", size_table, html, flags=re.S | re.I)
+    return _TABLE_BLOCK_RE.sub(size_table, html)
 
 
 def _fill_empty_rows(html):
@@ -1340,16 +1367,15 @@ def _fill_empty_rows(html):
     `_size_table_columns` itself skips for colspan/rowspan - an empty row is
     possible in either.
 
-    Matches `_size_table_columns` in bailing out of a table containing a
-    nested `<table>`, for the same reason: a non-greedy `<tr>...</tr>` match
-    stops at the *inner* table's own closing tag, not the outer row's, which
-    would otherwise corrupt the outer table's structure rather than leave it
-    alone.
+    Shares `_is_nested_table`'s bail-out with `_size_table_columns`, for the
+    same reason: a non-greedy `<tr>...</tr>` match stops at the *inner*
+    table's own closing tag, not the outer row's, which would otherwise
+    corrupt the outer table's structure rather than leave it alone.
     """
 
     def fill_table(table_match):
         table_html = table_match.group(0)
-        if "<table" in table_html[6:].lower():
+        if _is_nested_table(table_html):
             return table_html
 
         def fill_row(row_match):
@@ -1367,7 +1393,7 @@ def _fill_empty_rows(html):
 
         return _ROW_RE.sub(fill_row, table_html)
 
-    return re.sub(r"<table\b.*?</table>", fill_table, html, flags=re.S | re.I)
+    return _TABLE_BLOCK_RE.sub(fill_table, html)
 
 
 # --------------------------------------------------------------------------
@@ -1790,6 +1816,7 @@ def build(args):
     # ceiling regardless of what the user asked for.
     probe_timeout = min(_PLANTUML_PROBE_TIMEOUT, args.timeout)
     render_timeout = min(_PLANTUML_RENDER_TIMEOUT, args.timeout)
+    plantuml_exe = shutil.which("plantuml")
     # Installed only for this loop, the only place a plantuml subprocess runs:
     # _run_killing_tree's process-group isolation otherwise leaves a Ctrl-C
     # unable to reach it (see _forward_sigint_to_active). Restored before the
@@ -1802,7 +1829,7 @@ def build(args):
                 frag = _number_headings(frag, number_level, counters)
             frag = _map_images(
                 frag, src.parent, assets, frame_size, diagram_cache_dir,
-                probe_timeout, render_timeout,
+                probe_timeout, render_timeout, plantuml_exe,
             )
             frag = _fill_empty_rows(frag)
             frag = _size_table_columns(frag, frame_size[0], str(src))
