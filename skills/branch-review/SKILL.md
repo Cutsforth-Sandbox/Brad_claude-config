@@ -124,7 +124,7 @@ effect is unobservable.
 ## 6. Style check
 
 Run the `style-check` skill directly (no subagent — it's already a single,
-cheap pass) against everything the diff touches in its four categories:
+cheap pass) against everything the diff touches:
 
 - Every plan file the diff adds or changes (category: Plans).
 - Every doc file the diff adds or changes, excluding any file whose
@@ -141,7 +141,7 @@ what the diff itself wrote) — no step 5-style verification pass; the
 skill's own report is already "flag and suggest," not a bug claim needing a
 second opinion.
 
-**Done when** all four bullets have been checked or skipped for lacking
+**Done when** every bullet above has been checked or skipped for lacking
 matching files.
 
 ## 7. Report
@@ -157,10 +157,17 @@ Rank confirmed above plausible, and correctness above cleanup. Tag each
 finding's **origin**: introduced by this branch, inherited from the parent, or a
 gap worth flagging regardless. Name the refuted candidates in one line.
 
+If step 1 named a specific PR, this report's findings are the direct source
+for posted PR comments — before posting any of them, run each finding's
+drafted text through the `style-check` skill's PR comments category (one
+check per finding, not the whole report at once).
+
 **Done when** every candidate appears in the report or in that refuted line,
 every brief that returned `(none)` is listed as having found nothing, every
-style-check finding from step 6 appears in the report too, and any brief
-worked in-context rather than by subagent is named as such.
+style-check finding from step 6 appears in the report too, any brief
+worked in-context rather than by subagent is named as such, and — when this
+review targets a named PR — every finding intended for posting has been
+checked against style-check's PR comments category.
 
 Then write or update `memory/<repo-slug>.md` (create the file if it doesn't
 exist yet — every repo starts with none): briefs that triaged out and why (if

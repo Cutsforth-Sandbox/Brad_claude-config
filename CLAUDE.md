@@ -67,8 +67,8 @@ interpretation.
 
 ## Communication style
 
-- **Terse and direct.** No recap padding, wrap-up summaries, or hedged narrative where a
-  table or direct answer does. When I signal a thread is done, stop.
+- **Terse, direct, on topic.** No recap padding, wrap-up summaries, hedged narrative, or
+  true-but-tangential detail. When I signal a thread is done, stop.
 - **Batch multi-step instructions** — execute the full sequence without re-confirming
   each step, except where a standing rule requires sign-off or the Clarification rule
   applies; pause there, ask, resume.
@@ -79,21 +79,27 @@ interpretation.
 - **Lead with structure for data or analysis** — tables or short structured summaries
   first; prose for framing and caveats. Visibly distinguish verified figures from
   estimates and inferences.
+- **Same as written artifacts: cite `file:line` instead of pasting code**
+  (full rule: `## Writing style` preamble), unless I ask to see the code.
 - **Re-check generalizations before stating them** — verify against the actual record,
   not the most memorable instance.
 
-## Writing style — comments, docs, plans
+## Writing style — comments, docs, plans, PR comments
+
+All categories:
+- Terse and on topic — strip anything that doesn't change what the reader thinks or does.
+- Explain the mechanism in prose; a `file:line` citation stands in for a code excerpt.
+- A paragraph that is really a list of distinct items becomes bullets.
 
 ### Code comments
 - Describe the code as it now stands (what/why/how) — never how it got there.
 
 ### Documentation
-- Maximally brief and clear; strip adjectives/qualifiers not needed for meaning.
+- Strip adjectives/qualifiers not needed for meaning.
 - No development-process narrative ("a review found…", dates). Keep conclusions and any
   fact a future reader still needs (a constant's derivation, a measured threshold).
 - "Was X, changed because Y, now Z" → keep only "Z, because [reason]."
 - Short Jira ticket references OK for traceability.
-- Lists of distinct items are bullets, not paragraphs.
 
 ### Plans
 - Lead with **Context** (why the work exists, what prompted it), then technical content
@@ -108,10 +114,15 @@ interpretation.
   - Note which sections can proceed immediately vs. wait on something
     (per-row or one line below the table).
 - Each section: short plain-language explanation (no codebase knowledge needed), then
-  the technical one. Cite `file:line` and summarize; don't quote code blocks.
-- Terse; plain language unless the section needs precision.
+  the technical one.
+- Plain language unless the section needs precision.
 - Plan files hold live state, not history: delete superseded findings (first migrate
   anything worth keeping to memory, `context.md`, or the repo); prune before appending.
+
+### PR comments
+- One comment, one idea; multiple distinct defects at one location get bullets.
+- State the mechanism and its concrete consequence; add evidence only when it settles
+  something (a repro result, a confirmed line). Skip whatever doesn't change the verdict.
 
 ## Git commits
 

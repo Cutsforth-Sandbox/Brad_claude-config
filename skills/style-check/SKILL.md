@@ -1,6 +1,6 @@
 ---
 name: style-check
-description: Check code comments, documentation, plans, or git commit messages against the user's personal style rules in CLAUDE.md, and report violations — the offending text plus the exact rule it breaks. Use when asked to check or review one of those four against "my style guide" or "CLAUDE.md rules," or before finalizing a plan, doc, or commit. Not for chat-response tone or fact-sourcing checks (Communication style / Evidence and sourcing) — those need live judgment, not a text scan.
+description: Check code comments, documentation, plans, PR comments, or git commit messages against the user's personal style rules in CLAUDE.md, and report violations — the offending text plus the exact rule it breaks. Use when asked to check or review one of those five against "my style guide" or "CLAUDE.md rules," or before finalizing a plan, doc, PR comment, or commit. Not for chat-response tone or fact-sourcing checks (Communication style / Evidence and sourcing) — those need live judgment, not a text scan.
 ---
 
 # Style check
@@ -12,8 +12,10 @@ factual verification.
 
 ## Rule source
 
-The four rule sets live in `CLAUDE.md`'s `## Writing style — comments, docs,
-plans` section (covers comments/docs/plans) and its `## Git commits` section.
+The five rule sets live in `CLAUDE.md`'s `## Writing style — comments, docs,
+plans, PR comments` section (covers comments/docs/plans/PR comments) and its
+`## Git commits` section. That section opens with an "All categories"
+preamble that applies to every category below it, including Git commits' spirit.
 That file is normally already loaded into context automatically. If it isn't
 visible (e.g. running headless without the user's CLAUDE.md), read
 `~/.claude/CLAUDE.md` and pull those two sections before checking
@@ -27,11 +29,20 @@ quick-reference, not the authoritative wording.
 | File under a `plans/` directory, or opens with a `## Context` section | Plans |
 | A source code file | Code comments — check only comment lines/blocks, ignore the code itself |
 | A commit message, `git log` output, or `.git/COMMIT_EDITMSG` | Git commits |
+| A PR/review comment, drafted or posted | PR comments |
 | Any other prose/markdown/doc text | Documentation |
 
 If the user names the category explicitly, use that instead of guessing.
 
 ## What each category forbids
+
+**All categories**
+- Off-topic or tangential content that doesn't change what the reader
+  thinks or does.
+- A code excerpt where a `file:line` citation + prose explanation of the
+  mechanism would do.
+- A paragraph that's really a list of distinct items, left as prose instead
+  of bullets.
 
 **Code comments**
 - Narrating how the code got there instead of describing it as it now
@@ -43,8 +54,6 @@ If the user names the category explicitly, use that instead of guessing.
 - Development-process narrative: "a review found…", dates, "we decided to…".
 - "Was X, changed because Y, now Z" phrasing — should collapse to "Z, because
   [reason]."
-- Paragraphs where the content is really a list of distinct items — should
-  be bullets.
 - (Short Jira ticket references are fine — not a violation.)
 
 **Plans**
@@ -58,8 +67,15 @@ If the user names the category explicitly, use that instead of guessing.
   legitimate technical rollout phase).
 - Revision history / "Version N" framing instead of current-state-only
   content.
-- Quoted code blocks where a `file:line` citation + summary would do.
 - Verbose or hedgy prose where terse, plain language would do.
+
+**PR comments**
+- More than one distinct defect blended into a single paragraph — should
+  split into bullets or separate comments.
+- No mechanism or concrete consequence stated (e.g. "this looks wrong" with
+  nothing explaining why or what breaks).
+- Evidence that doesn't change the verdict (a repro or line reference
+  included even though it settles nothing).
 
 **Git commit messages**
 - Message doesn't lead with what changed, briefly how.
