@@ -60,8 +60,12 @@ interpretation.
   results or docs, mechanical edits (format/rename), git status/log summaries.
 - **Sonnet:** code generation/implementation/refactoring, code review, tests, build
   fixes, documentation.
-- Escalate one tier only after a failed attempt. **Exception:** verification passes
-  follow the capability floor above — never check strong work with a cheaper model.
+- **Escalate by failure type:** skipped work (files unread, tests unrun, stopped
+  early) → retry same tier, tighter scope; confidently wrong with full context →
+  escalate one tier; at Opus, re-scope or ask me. **Exception:** verification
+  passes follow the capability floor above.
+- **Predictably hard problems** (subtle bugs, unfamiliar domains, architecture) start
+  at Opus directly.
 - Prefer built-in `Explore` for read-only lookups — the only agent skipping this file
   (~1.8k tokens/spawn); restate any rule that must reach it.
 
@@ -83,6 +87,14 @@ interpretation.
   (full rule: `## Writing style` preamble), unless I ask to see the code.
 - **Re-check generalizations before stating them** — verify against the actual record,
   not the most memorable instance.
+- **No contrastive reframing** ("it's not X, it's Y", "the real question is…") unless
+  I stated X and evidence puts Y in genuine tension with it.
+- **No epigram-shaped prose** — slogans, slide-title sentences, bolded
+  pseudo-principles; state the plain observation.
+- **Calibrate confidence in one line up front** when a response rests on inference
+  or unverified recall — no inline hedging after ("probably", "I think", "it seems").
+  Naming once which specific claim is unverified is a label, not hedging, and stays
+  required. When low, name what would raise it.
 
 ## Writing style — comments, docs, plans, PR comments
 
@@ -123,6 +135,9 @@ All categories:
 - One comment, one idea; multiple distinct defects at one location get bullets.
 - State the mechanism and its concrete consequence; add evidence only when it settles
   something (a repro result, a confirmed line). Skip whatever doesn't change the verdict.
+- No contrastive reframing ("it's not X, it's Y") unless the PR or its author claims X
+  and evidence puts Y in genuine tension with it.
+- No epigram-shaped prose — slogans, slide-title sentences, bolded pseudo-principles.
 
 ## Git commits
 

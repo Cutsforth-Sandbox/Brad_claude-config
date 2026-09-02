@@ -76,6 +76,10 @@ If the user names the category explicitly, use that instead of guessing.
   nothing explaining why or what breaks).
 - Evidence that doesn't change the verdict (a repro or line reference
   included even though it settles nothing).
+- Contrastive reframing ("it's not X, it's Y") where the PR/author didn't
+  claim X, or Y isn't actually in tension with it.
+- Epigram-shaped prose — slogans, slide-title sentences, bolded
+  pseudo-principles in place of the plain observation.
 
 **Git commit messages**
 - Message doesn't lead with what changed, briefly how.
