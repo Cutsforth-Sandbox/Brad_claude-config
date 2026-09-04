@@ -397,6 +397,90 @@ def _strip_at_page(css, source):
     return "".join(out)
 
 
+_CSS_FONT_SIZE_RE = re.compile(r"font-size\s*:\s*([\d.]+)pt", re.I)
+# End-anchored on both: a three/four-value padding shorthand must NOT match
+# either pattern (otherwise the second value would be misread as if it were
+# a plain two-value shorthand's horizontal side) - it falls through to the
+# safe default instead, same as any other unsupported form.
+_CSS_PADDING_2_RE = re.compile(r"padding\s*:\s*[\d.]+pt\s+([\d.]+)pt\s*(?:;|$)", re.I)
+_CSS_PADDING_1_RE = re.compile(r"padding\s*:\s*([\d.]+)pt\s*(?:;|$)", re.I)
+
+
+def _table_css_overrides(css):
+    """(td_size_pt, th_size_pt, code_size_pt, padding_lr_pt): the effective
+    font-size/padding the table-width feasibility check should assume, given
+    the user's --css - each independently defaulting to BASE_CSS's own values
+    (_SIZE_BODY_PT, _SIZE_CODE_PT, _CELL_PADDING_LR_PT) whenever a value can't
+    be confidently read back out of arbitrary CSS.
+
+    Not a general CSS parser: only a rule whose selector list contains the
+    bare simple selector `td`, `th`, or `code` is read at all, and only its
+    font-size (in pt) and padding (one- or two-value pt shorthand) are
+    extracted - a class-qualified selector, a different unit, `!important`,
+    and three/four-value padding are all left at the safe default rather than
+    guessed at. This can only ever make the check MORE permissive when it
+    correctly recognizes a real override, never silently more permissive on
+    a guess: a real full CSS cascade (selector specificity, shorthand `font`)
+    is out of scope.
+
+    td and th font-size are tracked and returned separately, not collapsed
+    into one shared value: _resolve_run_font already distinguishes is_th for
+    bold selection, so a td-only override would otherwise silently understate
+    a header's own floor too.
+
+    Mirrors the actual cascade for this narrow shape: --css is appended after
+    BASE_CSS in the same stylesheet (build()'s `css = ... + BASE_CSS + "\\n" +
+    extra_css`), so among equal-specificity bare-tag-selector rules the last
+    one in source order wins - the last matching rule found here is the one
+    used. Reuses _strip_at_page's comment-masking + brace-matching approach,
+    generalized to walk every top-level rule rather than just @page.
+    """
+    td_size_pt = th_size_pt = _SIZE_BODY_PT
+    code_size_pt = _SIZE_CODE_PT
+    padding_lr_pt = _CELL_PADDING_LR_PT
+
+    masked = re.sub(
+        r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), css, flags=re.S
+    )
+    i = 0
+    while True:
+        brace = masked.find("{", i)
+        if brace < 0:
+            break
+        selectors = {s.strip().lower() for s in masked[i:brace].split(",")}
+        depth, j = 0, brace
+        while j < len(masked):
+            if masked[j] == "{":
+                depth += 1
+            elif masked[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if j >= len(masked):
+            break
+        body = css[brace + 1 : j]
+
+        m = _CSS_FONT_SIZE_RE.search(body)
+        if m:
+            size = float(m.group(1))
+            if "td" in selectors:
+                td_size_pt = size
+            if "th" in selectors:
+                th_size_pt = size
+            if "code" in selectors:
+                code_size_pt = size
+
+        if "td" in selectors or "th" in selectors:
+            m = _CSS_PADDING_2_RE.search(body) or _CSS_PADDING_1_RE.search(body)
+            if m:
+                padding_lr_pt = float(m.group(1))
+
+        i = j + 1
+
+    return td_size_pt, th_size_pt, code_size_pt, padding_lr_pt
+
+
 # --------------------------------------------------------------------------
 # HTML transforms
 # --------------------------------------------------------------------------
@@ -1089,7 +1173,7 @@ _CELL_STYLE_ALIAS = {"strong": "b", "b": "b", "em": "i", "i": "i", "code": "code
 _CELL_WORD_SPLIT_RE = re.compile(r"( +)")
 
 
-def _resolve_run_font(is_th, bold, italic, mono):
+def _resolve_run_font(is_th, bold, italic, mono, td_size_pt, th_size_pt, code_size_pt):
     """(font_name, size_pt) for one text run, matching what the renderer
     actually draws.
 
@@ -1106,27 +1190,37 @@ def _resolve_run_font(is_th, bold, italic, mono):
     `boldItalic="DejaVuSans-Bold"` - confirmed directly that reportlab's own
     `tt2ps` resolves bold+italic to plain Bold, dropping italic, so
     measuring it any other way would disagree with what actually renders.
+
+    td_size_pt/th_size_pt/code_size_pt default to _SIZE_BODY_PT (both) and
+    _SIZE_CODE_PT at every call site but build()'s, which threads in
+    _table_css_overrides's result instead.
     """
     if mono:
-        return _FONT_MONO, _SIZE_CODE_PT
+        return _FONT_MONO, code_size_pt
+    size = th_size_pt if is_th else td_size_pt
     if bold or is_th:
-        return _FONT_BOLD, _SIZE_BODY_PT
+        return _FONT_BOLD, size
     if italic:
-        return _FONT_ITALIC, _SIZE_BODY_PT
-    return _FONT_PLAIN, _SIZE_BODY_PT
+        return _FONT_ITALIC, size
+    return _FONT_PLAIN, size
 
 
-def _cell_text_metrics(cell_html, is_th):
-    """(proportional_pt, widest_word_pt): a cell's rendered content in real
-    point-widths, not character counts.
+def _cell_text_metrics(
+    cell_html, is_th,
+    td_size_pt=_SIZE_BODY_PT, th_size_pt=_SIZE_BODY_PT, code_size_pt=_SIZE_CODE_PT,
+):
+    """(proportional_pt, widest_word_pt, widest_word_text): a cell's rendered
+    content in real point-widths, not character counts.
 
     proportional_pt is the sum of every text run's real stringWidth, each in
     its own resolved font/size - used only to divide up whatever frame width
     is left after every column's own floor (below) is satisfied.
 
-    widest_word_pt is the width of the cell's single widest unbreakable
-    run - a hard floor, since nothing downstream can wrap or clip an
-    over-wide word (see _COL_PADDING_RESERVE_PT's comment). A run glued to
+    widest_word_pt/widest_word_text are the width and text of the cell's
+    single widest unbreakable run - a hard floor, since nothing downstream
+    can wrap or clip an over-wide word (see _COL_PADDING_RESERVE_PT's
+    comment); the text itself is carried along only so a wrap-fallback
+    diagnostic can name the actual word, not just its width. A run glued to
     the next across a tag boundary with no whitespace between them (e.g.
     "pre<code>fix</code>") is one word, not two: each sub-run keeps its own
     font for its own width contribution, but the widths are summed rather
@@ -1138,14 +1232,16 @@ def _cell_text_metrics(cell_html, is_th):
     open_tags = []
     total_pt = 0.0
     widest_pt = 0.0
+    widest_text = ""
     run_pt = 0.0
+    run_text = ""
     run_open = False
 
     def flush_run():
-        nonlocal run_pt, run_open, widest_pt
-        if run_open:
-            widest_pt = max(widest_pt, run_pt)
-        run_pt, run_open = 0.0, False
+        nonlocal run_pt, run_text, run_open, widest_pt, widest_text
+        if run_open and run_pt > widest_pt:
+            widest_pt, widest_text = run_pt, run_text
+        run_pt, run_text, run_open = 0.0, "", False
 
     for chunk in _CELL_RUN_SPLIT_RE.split(cell_html):
         if not chunk:
@@ -1168,7 +1264,8 @@ def _cell_text_metrics(cell_html, is_th):
 
         text = html.unescape(chunk)
         font, size = _resolve_run_font(
-            is_th, "b" in open_tags, "i" in open_tags, "code" in open_tags
+            is_th, "b" in open_tags, "i" in open_tags, "code" in open_tags,
+            td_size_pt, th_size_pt, code_size_pt,
         )
         for i, part in enumerate(_CELL_WORD_SPLIT_RE.split(text)):
             if not part:
@@ -1180,12 +1277,14 @@ def _cell_text_metrics(cell_html, is_th):
             total_pt += width
             if i == 0 and run_open:
                 run_pt += width  # glued to the previous run's tail, no whitespace between
+                run_text += part
             else:
                 flush_run()
                 run_pt = width
+                run_text = part
             run_open = True
     flush_run()
-    return total_pt, widest_pt
+    return total_pt, widest_pt, widest_text
 
 
 def _solve_column_widths(proportional, floors, frame_w_pt):
@@ -1243,7 +1342,11 @@ def _is_nested_table(table_html):
     return "<table" in table_html[6:].lower()
 
 
-def _size_table_columns(html, frame_w_pt, source_name):
+def _size_table_columns(
+    html, frame_w_pt, source_name,
+    td_size_pt=_SIZE_BODY_PT, th_size_pt=_SIZE_BODY_PT, code_size_pt=_SIZE_CODE_PT,
+    padding_lr_pt=_CELL_PADDING_LR_PT, allow_wrap_fallback=True,
+):
     """Give every table's columns widths sized to their own contents.
 
     xhtml2pdf renders all columns equal-width by default: `table { width:
@@ -1258,8 +1361,15 @@ def _size_table_columns(html, frame_w_pt, source_name):
     frame_w_pt is the page's content width in points (`_content_frame_size`'s
     first element) - real font-metric measurement needs to know how much
     room there actually is. source_name is only for the failure message
-    below.
+    below. td_size_pt/th_size_pt/code_size_pt/padding_lr_pt default to
+    BASE_CSS's own values but build() threads in _table_css_overrides's
+    result instead, so a `--css` override that changes them moves the check.
+
+    allow_wrap_fallback controls whether a table that doesn't fit even at its
+    real floor gets one more attempt (see _relax_for_wrap_fallback) before
+    failing, or fails immediately as in round 8 (--no-table-wrap-fallback).
     """
+    padding_reserve_pt = 4 * padding_lr_pt
     table_idx = [0]
 
     def size_table(table_match):
@@ -1289,25 +1399,44 @@ def _size_table_columns(html, frame_w_pt, source_name):
         if ncols < 2:
             return table_html
 
+        # col_cells keeps every cell's own (word_pt, row_idx) per column,
+        # not just each column's max, so a later wrap-fallback pass can
+        # relax one cell's contribution at a time without re-measuring.
+        # cell_word/cell_text are keyed by (row_idx, col) for the same
+        # cells, for the fallback's own diagnostic and its final
+        # unmark-if-it-turned-out-fine check.
         col_prop = [0.0] * ncols
-        col_word = [0.0] * ncols
-        for _, cells in rows:
+        col_cells = [[] for _ in range(ncols)]
+        cell_word = {}
+        cell_text = {}
+        for row_idx, (_, cells) in enumerate(rows):
             for col, cell in enumerate(cells):
                 if col >= ncols:
                     break
                 is_th = cell[0].lower() == "th"
-                prop, word = _cell_text_metrics(cell[2], is_th)
+                prop, word, word_text = _cell_text_metrics(
+                    cell[2], is_th, td_size_pt, th_size_pt, code_size_pt
+                )
                 if prop > col_prop[col]:
                     col_prop[col] = prop
-                if word > col_word[col]:
-                    col_word[col] = word
-        col_floor = [w + _COL_PADDING_RESERVE_PT for w in col_word]
+                col_cells[col].append((word, row_idx))
+                cell_word[row_idx, col] = word
+                cell_text[row_idx, col] = word_text
+        col_word = [max((w for w, _ in cells), default=0.0) for cells in col_cells]
+        col_floor = [w + padding_reserve_pt for w in col_word]
+        original_col_floor = list(col_floor)
 
         widths_pt = _solve_column_widths(col_prop, col_floor, frame_w_pt)
+        cjk_marked = set()
+        if widths_pt is None and allow_wrap_fallback:
+            widths_pt, cjk_marked = _relax_for_wrap_fallback(
+                col_prop, col_word, col_floor, col_cells, frame_w_pt,
+                padding_reserve_pt, td_size_pt, th_size_pt,
+            )
         if widths_pt is None:
             per_col = "\n".join(
                 "    column {}: {:.0f}pt minimum".format(i + 1, f)
-                for i, f in enumerate(col_floor)
+                for i, f in enumerate(original_col_floor)
             )
             _fail(
                 "table #{idx} in {src} ({ncols} columns) cannot fit inside "
@@ -1321,37 +1450,141 @@ def _size_table_columns(html, frame_w_pt, source_name):
                 "table padding/font-size, e.g.:\n"
                 "    td, th {{ font-size: 8pt; padding: 2pt 4pt; }}".format(
                     idx=idx, src=source_name, ncols=ncols, avail=frame_w_pt,
-                    pad=_COL_PADDING_RESERVE_PT, need=sum(col_floor),
-                    over=sum(col_floor) - frame_w_pt, per_col=per_col,
+                    pad=padding_reserve_pt, need=sum(original_col_floor),
+                    over=sum(original_col_floor) - frame_w_pt, per_col=per_col,
                 )
             )
+
+        # A column's slack redistribution can hand a relaxed column more
+        # width than its own bare floor once the retry succeeds - in which
+        # case the word that triggered the fallback may fit unwrapped after
+        # all. Only report and apply CJK-wrap for cells that still need it.
+        if cjk_marked:
+            cjk_marked = {
+                (r, c) for r, c in cjk_marked
+                if widths_pt[c] < cell_word[r, c] + padding_reserve_pt
+            }
+        if cjk_marked:
+            cols = sorted({c for _, c in cjk_marked})
+            words = ", ".join(
+                "{!r}".format(cell_text[r, c][:40])
+                for r, c in sorted(cjk_marked)
+            )
+            print(
+                "md-to-pdf: {src}, table #{idx}: column(s) {cols} hold a word "
+                "too wide to fit even at minimum width - wrapped at the "
+                "character level ({words}) instead of failing the build. "
+                "Reword or shorten it if the jagged appearance matters.".format(
+                    src=source_name, idx=idx,
+                    cols=", ".join(str(c + 1) for c in cols), words=words,
+                ),
+                file=sys.stderr,
+            )
+
         pct = [w / frame_w_pt * 100.0 for w in widths_pt]
+
+        # Tracks the same row numbering the measurement pass used above,
+        # where a row with zero cells is skipped entirely (`if cells` a few
+        # lines up) - row_idx only advances when this row turned out to
+        # have at least one cell, so the two passes' numbering can't drift
+        # apart even if a stray cell-less <tr> appears in the markup.
+        row_idx = [0]
 
         def rewrite_row(row_match):
             inner = row_match.group(1)
             col = [0]
+            current_row = row_idx[0]
+            saw_cell = [False]
 
             def rewrite_cell(cell_match):
+                saw_cell[0] = True
                 tag, attrs, body = cell_match.group(1), cell_match.group(2) or "", cell_match.group(3)
                 i = col[0]
                 col[0] += 1
                 if i >= ncols:
                     return cell_match.group(0)
-                width = "width:{:.1f}%".format(pct[i])
+                decl = "width:{:.1f}%".format(pct[i])
+                if (current_row, i) in cjk_marked:
+                    decl += ";-pdf-word-wrap:CJK"
                 # Merge into an existing style rather than adding a second
                 # attribute, which the parser would ignore. Either quote style
                 # counts as existing.
                 if _STYLE_RE.search(attrs):
-                    attrs = _STYLE_RE.sub(r"\1" + width + ";", attrs, count=1)
+                    attrs = _STYLE_RE.sub(r"\1" + decl + ";", attrs, count=1)
                 else:
-                    attrs = '{} style="{}"'.format(attrs, width)
+                    attrs = '{} style="{}"'.format(attrs, decl)
                 return "<{}{}>{}</{}>".format(tag, attrs, body, tag)
 
-            return row_match.group(0).replace(inner, _CELL_RE.sub(rewrite_cell, inner), 1)
+            new_inner = _CELL_RE.sub(rewrite_cell, inner)
+            if saw_cell[0]:
+                row_idx[0] += 1
+            return row_match.group(0).replace(inner, new_inner, 1)
 
         return _ROW_RE.sub(rewrite_row, table_html)
 
     return _TABLE_BLOCK_RE.sub(size_table, html)
+
+
+def _relax_for_wrap_fallback(
+    col_prop, col_word, col_floor, col_cells, frame_w_pt, padding_reserve_pt,
+    td_size_pt, th_size_pt,
+):
+    """(widths_pt, cjk_marked) after relaxing the worst offending column(s)
+    as many times as it takes to fit, wrapping their content at the
+    character level instead - or (None, set()) if nothing more can be
+    relaxed and the table still doesn't fit.
+
+    col_word/col_floor are mutated in place (the caller's copies) as this
+    progresses; col_prop and the original col_floor snapshot for a possible
+    failure message are the caller's job, not this function's.
+
+    Each iteration finds the column whose current widest remaining word is
+    the largest across the whole table, excludes every cell in that column
+    tied for that same value (not just one - a token repeated across
+    several rows in the same column would otherwise cost one wasted
+    iteration per repeat, since the column's floor doesn't move until every
+    copy of the tied-widest word is gone), and recomputes that column's
+    floor from whatever remains - down to a small safety floor
+    (_cjk_min_char_pt) rather than all the way to zero, so a fully-relaxed
+    column can never be assigned less content width than a single character
+    needs, the same class of negative-available-width crash round 8's own
+    fix exists to prevent, one level down. A column that stops shrinking
+    (already at its safety floor) is dropped from further consideration so
+    this always terminates, in at most one relaxation per remaining cell.
+    """
+    from reportlab.pdfbase import pdfmetrics  # local: see _fit_svg_size/_fit_png_size
+
+    min_char_pt = pdfmetrics.stringWidth("W", _FONT_BOLD, max(td_size_pt, th_size_pt))
+    ncols = len(col_word)
+    excluded = set()
+    cjk_marked = set()
+    relaxable = set(range(ncols))
+    widths_pt = None
+
+    while widths_pt is None and relaxable:
+        worst_col = max(relaxable, key=lambda c: col_word[c])
+        target = col_word[worst_col]
+        if target <= min_char_pt:
+            relaxable.discard(worst_col)
+            continue
+        newly_marked = [
+            (w, r) for w, r in col_cells[worst_col]
+            if w == target and (r, worst_col) not in excluded
+        ]
+        for w, r in newly_marked:
+            excluded.add((r, worst_col))
+            cjk_marked.add((r, worst_col))
+        remaining = [
+            w for w, r in col_cells[worst_col] if (r, worst_col) not in excluded
+        ]
+        new_word = max(remaining, default=min_char_pt)
+        if new_word >= target:
+            relaxable.discard(worst_col)
+        col_word[worst_col] = new_word
+        col_floor[worst_col] = new_word + padding_reserve_pt
+        widths_pt = _solve_column_widths(col_prop, col_floor, frame_w_pt)
+
+    return widths_pt, (cjk_marked if widths_pt is not None else set())
 
 
 def _fill_empty_rows(html):
@@ -1779,6 +2012,7 @@ def build(args):
         if not css_path.is_file():
             _fail("stylesheet not found: {}".format(css_path.resolve()))
         extra_css = _strip_at_page(css_path.read_text(encoding="utf-8-sig"), css_path)
+    td_size_pt, th_size_pt, code_size_pt, padding_lr_pt = _table_css_overrides(extra_css)
 
     sources = [Path(p).resolve() for p in args.inputs]
     for src in sources:
@@ -1832,7 +2066,11 @@ def build(args):
                 probe_timeout, render_timeout, plantuml_exe,
             )
             frag = _fill_empty_rows(frag)
-            frag = _size_table_columns(frag, frame_size[0], str(src))
+            frag = _size_table_columns(
+                frag, frame_size[0], str(src),
+                td_size_pt, th_size_pt, code_size_pt, padding_lr_pt,
+                args.table_wrap_fallback,
+            )
             processed.append(frag)
     finally:
         signal.signal(signal.SIGINT, prior_sigint)
@@ -2064,6 +2302,17 @@ def _parse_args(argv):
     p.add_argument(
         "--timeout", type=int, default=120, metavar="SECONDS",
         help="wall-clock ceiling per render pass (default: 120)",
+    )
+    p.add_argument(
+        "--table-wrap-fallback", dest="table_wrap_fallback", action="store_true",
+        default=True,
+        help="wrap a word too long to fit any column at the character level "
+             "instead of failing the build (default: on)",
+    )
+    p.add_argument(
+        "--no-table-wrap-fallback", dest="table_wrap_fallback", action="store_false",
+        help="fail the build when a table's columns can't all fit, even if a "
+             "word could be wrapped to make it fit",
     )
     args = p.parse_args(argv)
     if args.number_from_level:
