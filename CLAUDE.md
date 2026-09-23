@@ -25,6 +25,11 @@
 - **Every number carries its derivation, inline.** A figure entering a plan, document,
   or instruction names the command, query, or document+page that produced it —
   unprompted. A number with no derivation is unverified on sight.
+- **A proposed fix is a claim, not a conclusion.** Verify a remedy as hard as the defect
+  it addresses — run it, check it against the same sources, and confirm it does not trade
+  one failure mode for another. Scope this to fixes concrete enough to apply directly; a
+  one-liner whose check costs more than the change does not need it. Label an unverified
+  suggestion as unverified.
 
 ## Finding factual answers
 
@@ -102,6 +107,8 @@ All categories:
 - Terse and on topic — strip anything that doesn't change what the reader thinks or does.
 - Explain the mechanism in prose; a `file:line` citation stands in for a code excerpt.
 - A paragraph that is really a list of distinct items becomes bullets.
+- One sentence, one idea — split any sentence the reader must re-read to parse, whether
+  it stacks distinct items or buries a single idea under nested clauses.
 
 ### Code comments
 - Describe the code as it now stands (what/why/how) — never how it got there.
