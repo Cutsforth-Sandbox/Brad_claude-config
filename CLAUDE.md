@@ -109,6 +109,10 @@ All categories:
 - A paragraph that is really a list of distinct items becomes bullets.
 - One sentence, one idea — split any sentence the reader must re-read to parse, whether
   it stacks distinct items or buries a single idea under nested clauses.
+- One bullet, one point: two separate changes, findings or decisions split into two.
+  Supporting detail may stay inline unless it buries the point.
+- Describe current behaviour completely: a stated range or condition includes every case
+  the behaviour covers.
 
 ### Code comments
 - Describe the code as it now stands (what/why/how) — never how it got there.
@@ -145,6 +149,11 @@ All categories:
 - No contrastive reframing ("it's not X, it's Y") unless the PR or its author claims X
   and evidence puts Y in genuine tension with it.
 - No epigram-shaped prose — slogans, slide-title sentences, bolded pseudo-principles.
+
+### Customer-facing documents
+- Release notes, customer communications, customer-facing decks: load the `customer-docs`
+  skill, whose Rules replace *Documentation* and the inline-derivation rule in *Evidence
+  and sourcing*.
 
 ## Git commits
 
