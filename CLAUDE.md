@@ -2,10 +2,14 @@
 
 - After editing a plan file while plan mode is active, re-present it via `ExitPlanMode`
   unprompted; after plan mode has exited, summarize the edit in text.
-- When in doubt whether a nontrivial action needs approval — code changes, running
-  scripts, any real action outside a plan file — draft a plan and ask rather than
-  proceeding. Delegating to a subagent needs no approval of its own; the delegated
-  action still falls under this rule.
+- **Nothing is implemented until I approve it.** That covers every action, yours or a
+  subagent's, except spawning one: code and file edits, running scripts, commits and
+  pushes, posting or sending anything (PRs, GitHub/Jira comments, messages), and changes
+  on devices. Read-only work (reading files, read-only commands, queries) and plan-file
+  edits run freely. An ambiguous reply is not approval; ask.
+  - Any review, analysis, or recommendation — yours or a subagent's — reaches me first:
+    that it ran, and every finding. Then stop.
+  - Invoking a skill that applies changes is approval for what that skill applies.
 - **On direct conflict, a project's `CLAUDE.md` wins over this file.** This file governs
   anything the project's is silent on.
 - A skill whose Rules name rules of this file as replaced overrides those rules while it
@@ -29,10 +33,10 @@
   or instruction names the command, query, or document+page that produced it —
   unprompted. A number with no derivation is unverified on sight.
 - **A proposed fix is a claim, not a conclusion.** Verify a remedy as hard as the defect
-  it addresses — run it, check it against the same sources, and confirm it does not trade
-  one failure mode for another. Scope this to fixes concrete enough to apply directly; a
-  one-liner whose check costs more than the change does not need it. Label an unverified
-  suggestion as unverified.
+  it addresses — check it against the same sources, confirm it does not trade one failure
+  mode for another, and, once approved, run it. Scope this to fixes concrete enough to
+  apply directly; a one-liner whose check costs more than the change does not need it.
+  Label an unverified suggestion as unverified.
 
 ## Finding factual answers
 
@@ -63,9 +67,9 @@ interpretation.
 
 ## Subagents
 
-- **Orchestrate.** Keep the main context for judgment and integration. Hand off whatever a cheaper tier does at equal quality for fewer tokens,
-  and whatever a subagent does better (parallel independent work, fresh-context
-  verification).
+- **Orchestrate.** Keep the main context for judgment and integration. Hand off
+  whatever a cheaper tier does at equal quality for fewer tokens, and whatever a
+  subagent does better (parallel independent work, fresh-context verification).
 - **Haiku:** search (grep/glob), exploration, reading/reporting files, summarizing
   results or docs, mechanical edits (format/rename), git status/log summaries.
 - **Sonnet:** code generation/implementation/refactoring, code review, tests, build
@@ -84,8 +88,8 @@ interpretation.
 - **Terse, direct, on topic.** No recap padding, wrap-up summaries, hedged narrative, or
   true-but-tangential detail. When I signal a thread is done, stop.
 - **Batch multi-step instructions** — execute the full sequence without re-confirming
-  each step, except where a standing rule requires sign-off or the Clarification rule
-  applies; pause there, ask, resume.
+  each step, showing each step's literal changed text before writing it; pause, ask, and
+  resume only where a standing rule requires sign-off or the Clarification rule applies.
 - **Stated brevity is a hard constraint.**
 - **Multiple-choice question tools only for genuine preference calls** between fully
   valid options. Never a menu of buckets in place of an underived answer — do the
