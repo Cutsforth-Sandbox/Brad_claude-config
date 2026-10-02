@@ -10,6 +10,10 @@ investigation, or the internal names, and read the document once to decide what 
 
 ## Rules
 
+**Overrides**
+- These Rules replace `CLAUDE.md`'s *Documentation* rules and the inline-derivation rule in
+  its *Evidence and sourcing*.
+
 **Predecessor**
 - Reuse the predecessor's sections, labels and tone where they fit. Its length is a
   reference, not a limit, and these rules override its format where the two differ.

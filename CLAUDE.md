@@ -1,12 +1,15 @@
 # Personal preferences
 
-- Whenever a plan file is updated (edited after being written), automatically re-present
-  it via `ExitPlanMode` so I can review the change — don't wait to be asked.
+- After editing a plan file while plan mode is active, re-present it via `ExitPlanMode`
+  unprompted; after plan mode has exited, summarize the edit in text.
 - When in doubt whether a nontrivial action needs approval — code changes, running
-  scripts, spawning subagents, any real action outside a plan file — draft a plan and ask
-  rather than proceeding.
+  scripts, any real action outside a plan file — draft a plan and ask rather than
+  proceeding. Delegating to a subagent needs no approval of its own; the delegated
+  action still falls under this rule.
 - **On direct conflict, a project's `CLAUDE.md` wins over this file.** This file governs
   anything the project's is silent on.
+- A skill whose Rules name rules of this file as replaced overrides those rules while it
+  runs.
 
 ## Evidence and sourcing
 
@@ -38,9 +41,8 @@ down this list and stop at the first source that answers:
 
 1. **`context.md`** — project root, then `~/.claude/context.md`. Follow its direction if
    it points to a source.
-2. **Local hardware docs** — the `HW_Docs` library, located per `~/.claude/context.md`;
-   its own `context.md` is the manifest. Check a row's `verified` date before treating
-   the local PDF as authoritative; follow the manifest's notes when it is stale.
+2. **Local hardware docs** — the `HW_Docs` library and its manifest, per
+   `~/.claude/context.md`.
 3. **Official sources online** — the manufacturer's or project's own documentation; not
    forums, blogs, or aggregators.
    - **Link provenance, not hostname, makes a source official**: a document reached via a
@@ -61,6 +63,9 @@ interpretation.
 
 ## Subagents
 
+- **Orchestrate.** Keep the main context for judgment and integration. Hand off whatever a cheaper tier does at equal quality for fewer tokens,
+  and whatever a subagent does better (parallel independent work, fresh-context
+  verification).
 - **Haiku:** search (grep/glob), exploration, reading/reporting files, summarizing
   results or docs, mechanical edits (format/rename), git status/log summaries.
 - **Sonnet:** code generation/implementation/refactoring, code review, tests, build
@@ -71,8 +76,8 @@ interpretation.
   passes follow the capability floor above.
 - **Predictably hard problems** (subtle bugs, unfamiliar domains, architecture) start
   at Opus directly.
-- Prefer built-in `Explore` for read-only lookups — the only agent skipping this file
-  (~1.8k tokens/spawn); restate any rule that must reach it.
+- Prefer built-in `Explore` for read-only lookups; it and `Plan` skip this file, so
+  restate any rule that must reach them.
 
 ## Communication style
 
@@ -88,8 +93,7 @@ interpretation.
 - **Lead with structure for data or analysis** — tables or short structured summaries
   first; prose for framing and caveats. Visibly distinguish verified figures from
   estimates and inferences.
-- **Same as written artifacts: cite `file:line` instead of pasting code**
-  (full rule: `## Writing style` preamble), unless I ask to see the code.
+- **Cite `file:line` instead of pasting code**, unless I ask to see the code.
 - **Re-check generalizations before stating them** — verify against the actual record,
   not the most memorable instance.
 - **No contrastive reframing** ("it's not X, it's Y", "the real question is…") unless
@@ -149,11 +153,6 @@ All categories:
 - No contrastive reframing ("it's not X, it's Y") unless the PR or its author claims X
   and evidence puts Y in genuine tension with it.
 - No epigram-shaped prose — slogans, slide-title sentences, bolded pseudo-principles.
-
-### Customer-facing documents
-- Release notes, customer communications, customer-facing decks: load the `customer-docs`
-  skill, whose Rules replace *Documentation* and the inline-derivation rule in *Evidence
-  and sourcing*.
 
 ## Git commits
 
