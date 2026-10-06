@@ -41,6 +41,10 @@ skills/**/_deps*/
 skills/**/_diagrams/
 skills/**/*.pdf
 
+# Skills the Claude app syncs in. Per-machine and app-managed; without this, `!skills/**`
+# above re-includes them and `scripts/sync-config.sh push` refuses to run.
+skills/synced/
+
 # Never track a skill's calibration memory. These accumulate direct references to the user's work --
 # private repo names, source filenames, internal symbols and defect details -- which is exactly
 # what this repo must not carry. The skills recreate these files on demand.
