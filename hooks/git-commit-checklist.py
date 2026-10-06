@@ -33,13 +33,12 @@ The `ask` RULE did start prompting once the user changed their permission mode; 
 `ask` was never retested under that mode because the rule made it unnecessary.
 
 Coverage: `permissions.ask` carries four rules -- `Bash(git commit:*)` plus
-`Bash(git -C * commit:*)`, `Bash(git --no-pager commit:*)` and `Bash(git -c * commit:*)`. Bash
-rules are literal string matches with no flag normalisation, so the plain rule alone matched none
-of the flag forms the regex below catches, and those commits got the checklist with no veto behind
-it. Compound commands (`cd x && git commit`) are covered by the plain rule, since permission rules
-inspect subcommands -- verified. The three flag rules were added 2026-08-11; a mid-pattern `*`
-combined with a trailing `:*` is not a documented combination, so if a flag-form commit ever fails
-to prompt, that syntax is the first suspect.
+`Bash(git -C * commit*)`, `Bash(git --no-pager commit:*)` and `Bash(git -c * commit*)`. Bash
+rules are literal string matches with no flag normalisation, so the plain rule alone matches none
+of the flag forms the regex below catches. The `-C` and `-c` rules use a plain `*` wildcard: a
+mid-pattern `*` combined with a trailing `:*` is matched as a literal prefix and never fires, which
+Claude Code reports as a startup warning. Compound commands (`cd x && git commit`) are covered by
+the plain rule, since permission rules inspect subcommands -- verified.
 
 `commit` filtering lives here rather than in settings.json's `if` field because, per the
 Bash-`if` matching table, a pattern specifying more than the command name "run[s] the hook
@@ -80,10 +79,10 @@ print(json.dumps({"hookSpecificOutput": {
         "The question is put to them with AskUserQuestion, which renders visibly, rather than as "
         "plain text they might not be shown; it is answered before the commit runs, and the "
         "difftool is opened only on an explicit yes. "
-        "Commit messages always end with the Co-Authored-By trailer. That was settled on "
-        "2026-08-11 and is no longer asked per commit. This hook is the durable record of that "
-        "rule: the trailer itself is supplied by the environment, so if it ever stops appearing, "
-        "this sentence is what says it still should. "
+        "Commit messages end with the Co-Authored-By trailer; it is not asked about per commit. "
+        "The environment's attribution instructions normally give the exact line. When they are "
+        "absent the trailer is still expected, once, in the form "
+        "`Co-Authored-By: <model name> <noreply@anthropic.com>`. "
         "The user also sees a permission prompt for the commit itself, so a commit attempted "
         "without these two steps is one they are expected to decline."
     ),

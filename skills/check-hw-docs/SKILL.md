@@ -11,9 +11,9 @@ Manifest: `HW_Docs/context.md` — the cached official URL and last-seen signatu
 It is the reason this skill is cheap; keep it current (steps 5-6).
 
 The mechanical work (tiers 0-2, and version extraction on demand) lives in `checker.py`
-beside this file. **Do not re-derive it in shell.** It was extracted precisely because
-hand-rolling the tier-0 loop produced 18 false "stale" verdicts on 2026-08-10; the script
-encodes the per-host header quirks and parsing traps that caused them.
+beside this file. Use it rather than re-deriving the checks in shell: it encodes the
+per-host header quirks and parsing traps that make hand-rolled checks report false
+"stale" verdicts.
 
 ## Tooling
 

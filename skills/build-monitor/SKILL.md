@@ -72,30 +72,35 @@ and actually matches.
 
 ## 3. Arm one Monitor
 
-Fill the template below with the results of steps 1–2 and a poll cadence sized to the
-expected run time — roughly 60x the interval to total duration (30s for a 5-minute job,
-30 min for an overnight one). Too fast on a long job risks the harness auto-stopping a
-noisy monitor; too slow on a short one means nothing arrives before it's already done.
+Fill the template below with the results of steps 1–2 and a poll cadence of roughly 1/10
+of the expected run time, kept between 30 seconds and 5 minutes (30s for a 5-minute job,
+5 minutes for anything over 50 minutes), so each monitor window reports at least six
+times. Too fast risks the harness auto-stopping a noisy monitor; too slow means nothing
+arrives before it's already done.
 
-`Monitor`'s `timeout_ms` defaults to 300000 (5 minutes) and caps at 3600000 (1 hour)
-when not persistent — so **any run expected to take longer than 5 minutes needs an
-explicit `timeout_ms`** (expected duration plus a buffer, capped at 3600000), not just
-the default. Once the expected duration could exceed that 1-hour cap, set
-`persistent: true` instead. Give `description` something specific; it's what shows up
-in every notification.
+`Monitor`'s `timeout_ms` defaults to 300000 (5 minutes) and is capped at 1800000
+(30 minutes; 10 in single-prompt `-p` runs); there is no persistent mode. Set it to the
+expected duration plus a buffer, up to that cap. A run that can outlast the cap is
+re-armed on each expiry notice with the same template, filling `START_EPOCH` and
+`LASTCHECKPOINT` from the last `checkpoint = … || start_epoch = …` line the expired
+monitor emitted. That line can arrive as its own notification, separate from the progress
+lines above it. The new monitor resumes at the first line the old one had not finished
+examining. A monitor killed mid-cycle re-reads that cycle's lines, so a warning near the
+expiry can be counted twice; no line is skipped.
+Give `description` something specific; it's what shows up in every notification.
 
 ```bash
 LOG=<log path from step 1>
 PID=<pid from step 1, if one was captured>
-START_EPOCH=$(date +%s)
-LASTCHECKPOINT=0
+START_EPOCH=<first arm: $(date +%s); re-arm: start_epoch from the last checkpoint line>
+LASTCHECKPOINT=<first arm: $(wc -l < "$LOG"); re-arm: checkpoint from the last checkpoint line>
 fmt_dur() { printf '%02d:%02d:%02d' "$(($1/3600))" "$((($1%3600)/60))" "$(($1%60))"; }
 while true; do
   now_epoch=$(date +%s); elapsed=$(( now_epoch - START_EPOCH ))
-  new_lines=$(tail -n "+$((LASTCHECKPOINT + 1))" "$LOG")
-  if [ -n "$new_lines" ]; then
-    LASTCHECKPOINT=$(( LASTCHECKPOINT + $(grep -c '' <<< "$new_lines") ))
-  fi
+  total=$(wc -l < "$LOG")
+  new_lines=""
+  [ "$total" -gt "$LASTCHECKPOINT" ] && new_lines=$(sed -n "$((LASTCHECKPOINT + 1)),${total}p" "$LOG")
+  LASTCHECKPOINT=$total
   progress_line=$(grep -oE "<progress pattern from step 2>" "$LOG" | tail -1)
   raw_percent=$(<percent-complete extraction from step 2, integer 0-100 or empty>)
   percent=""; [ -n "$raw_percent" ] && percent=$((10#$raw_percent))
@@ -123,17 +128,16 @@ while true; do
   if [ "$log_done" = true ] || [ "$proc_dead" = true ]; then
     echo "FINISHED -- final lines:"; tail -30 "$LOG"; break
   fi
+  printf 'checkpoint = %s  ||  start_epoch = %s\n' "$LASTCHECKPOINT" "$START_EPOCH"
   sleep <cadence>
 done
 ```
 
-`new_lines` is read once per cycle and reused for both the warning count and the
-checkpoint advance — reading the log twice (once to count warnings, again via `wc -l`
-to find the new checkpoint) left a window for the file to grow in between, silently
-dropping whatever was written during it. Counting `new_lines` with `grep -c ''` rather
-than `wc -l` matters too: `wc -l` counts newline characters, so a log whose last line
-isn't yet newline-terminated (a live process still writing it) undercounts by one, and
-that missing line gets re-read and re-counted as "new" once it finally is terminated.
+`new_lines` is exactly the newline-terminated lines between the checkpoint and the
+`wc -l` count taken at the top of the cycle, and the checkpoint advances to that count. A
+line still being written stays for the next cycle, so a completion line is never consumed
+half-written. The first arm starts the checkpoint at the log's current length, so text
+already in the log (a startup banner, an earlier error) never ends the watch.
 
 ETA fields extrapolate linearly from percent-complete and are estimates, not guarantees
 — real builds usually aren't constant-rate (a slow link/package step at the end throws
@@ -144,8 +148,8 @@ morning gets the date-qualified form. `date -d "@<epoch>"` is GNU-date syntax
 (Git Bash/Linux); macOS/BSD `date` needs `-r <epoch>` instead.
 
 This loop has no independent stall detector: if the completion pattern never matches
-and `PID` (if set) never exits, it polls until `Monitor`'s timeout, or indefinitely
-under `persistent: true` until `TaskStop`. Getting the completion pattern right in
+and `PID` (if set) never exits, it polls until `Monitor`'s timeout, and each re-arm
+repeats that. Getting the completion pattern right in
 step 2 is what bounds this, not the timeout.
 
 After arming, tell the user the `Monitor` description in one line so they know what's

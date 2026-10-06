@@ -8,9 +8,9 @@
   "permissions": {
     "ask": [
       "Bash(git commit:*)",
-      "Bash(git -C * commit:*)",
+      "Bash(git -C * commit*)",
       "Bash(git --no-pager commit:*)",
-      "Bash(git -c * commit:*)"
+      "Bash(git -c * commit*)"
     ],
     "allow": [
       "mcp__codegraph__*",

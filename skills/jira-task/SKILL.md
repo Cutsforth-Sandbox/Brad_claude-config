@@ -24,9 +24,8 @@ a sprint or workflow.
 ## Style rules
 
 - Bullet lists, not narrative prose paragraphs.
-- Concise. Do not bloat with technical density — a draft once came back
-  "drastically bloated and technically dense" and was collapsed from 10
-  sections to this format.
+- Concise and light on technical density: each bullet carries one point the
+  assignee or a sprint planner needs.
 - Verify project facts against the repo/docs before stating them; do not
   narrate assumed history. Flag anything that is an assumption.
 
