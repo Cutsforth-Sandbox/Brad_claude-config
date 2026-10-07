@@ -65,8 +65,8 @@ Its subsections:
 - The material this ticket's work produced that explains it: tables, charts, diagrams,
   test results, before/after comparisons, screenshots. Each output earns its place by
   explaining a named part of the work.
-- Each output is its own page (its own Markdown file): its title, the output, then a short
-  list under an H2 "How to read this" heading, covering:
+- Each output is its own page (its own Markdown file): its title, a plain-language summary,
+  the output, then a short list under an H2 "How to read this" heading, covering:
   - what it shows;
   - how to interpret it;
   - its sources;
@@ -74,6 +74,10 @@ Its subsections:
   - how its derived values were computed: present only when it has any;
   - how it relates to current behaviour: present only when that changed after it was
     produced.
+- The plain-language summary is two to four sentences or bullets on what the output shows
+  and what it means for the reader. It is written to the `customer-docs` Rules (Audience,
+  Scope and proportion, Evidence, Tense), and uses the outsider's vocabulary in place of this
+  skill's Names and terms rule.
 - Refer to another output by its title; the PDF has no page numbers.
 
 ## Rules
@@ -131,7 +135,8 @@ change affects which outputs it needs. With no sources in its folder, run every 
    is met.
 4. Run `style-check` on the drafts with category Documentation, skipping the rules named
    under Overrides and adding this skill's Names and terms, Context, Scale and Tense rules.
-   A rule that needs facts the text lacks goes under "Not checkable from text". Done when
+   Check each output's plain-language summary with category Customer-facing instead. A
+   rule that needs facts the text lacks goes under "Not checkable from text". Done when
    each flag is applied or shown to the user with the reason it was not, and the drafts
    are presented to the user with the source of each figure no output shows.
 5. After the user approves the text, invoke the `md-to-pdf` skill to build the PDF with
