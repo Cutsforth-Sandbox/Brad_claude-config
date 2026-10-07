@@ -11,8 +11,13 @@ user presents it and retells it from the page.
 
 ## Format
 
-**File:** `~/Documents/Ticket_Summaries/<KEY>_Summary.pdf`, with its Markdown sources in
-`~/Documents/Ticket_Summaries/<KEY>/`.
+**File:** `~/Documents/Ticket_Summaries/Sprint-<NN>_<start>_<end>/<KEY>_Summary.pdf`, with its
+Markdown sources in `~/Documents/Ticket_Summaries/Sprint-<NN>_<start>_<end>/<KEY>/`. `<NN>`,
+`<start>` and `<end>` come from the ticket's Jira sprint (field `customfield_10020`: the number
+from the sprint's name, zero-padded to two digits, and `startDate`/`endDate` as YYYY-MM-DD in
+the user's local time). No parentheses: every shell command would have to quote them. A
+ticket carried across sprints goes in the sprint it was delivered in. Example:
+`Sprint-07_2026-01-05_2026-01-16/`.
 
 **Headings:** the parts 1–2 file opens with the title as its H1:
 `<KEY>: <the ticket's subject in plain words>`. Parts 1 and 2 are H2 headings, and part 2's
@@ -98,13 +103,14 @@ Its subsections:
 
 ## Workflow
 
-To regenerate a summary, run steps 1 and 3–5 on its existing sources, adding step 2 when the
+To regenerate a summary, run steps 1 and 3–6 on its existing sources, adding step 2 when the
 change affects which outputs it needs. With no sources in its folder, run every step.
 
 1. Confirm delivery and gather the facts:
    - the ticket's fields, verbatim, through a subagent making sequential Atlassian MCP
-     calls: key, browse URL, title, type, priority, assignee, description or plan,
-     acceptance criteria, linked issues, and the comments bearing on the outcome;
+     calls: key, browse URL, title, type, priority, assignee, sprint
+     (`customfield_10020`), description or plan, acceptance criteria, linked issues, and the
+     comments bearing on the outcome;
    - each PR's merge date, merge commit and approver, from `gh`, or another deliverable's
      form and date;
    - the evidence: test results, run IDs, logs, measurements.
@@ -132,3 +138,11 @@ change affects which outputs it needs. With no sources in its folder, run every 
    `--no-toc --no-page-numbers` and no `--title`: the parts 1–2 file first, then the
    outputs in their confirmed order. Done when every page has been rendered and viewed,
    and every title the text refers to matches an output's title.
+6. Add or update the ticket's entry in the sprint folder's `Sprint-<NN>_Summary.md`. Create
+   that file if it is missing: an H1 "Sprint N: ticket summaries", one line giving the
+   sprint's dates, then one H2 per ticket in delivery order. The entry is the ticket key and
+   its summary title as an H2, two or three plain-language bullets (the problem, what
+   changed, the result or the caveat a reader needs), then an italic line giving the PDF's
+   name and the PR with its merge date. Rebuild `Sprint-<NN>_Summary.pdf` with `md-to-pdf
+   --no-toc --no-page-numbers`. Done when the entry matches the ticket summary's figures and
+   the rebuilt page has been viewed.
