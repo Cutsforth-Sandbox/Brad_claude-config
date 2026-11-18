@@ -20,7 +20,7 @@ it already sits in a file; write it out only when it exists only in the conversa
 - When the user asked you to verify earlier responses or a plan, stage each one they refer
   to. Ask if it is unclear which.
 - For a doc edit, also copy the full document to `<scratchpad>/fc/doc-N.<ext>`, apply the
-  edit to the copy, and give that path.
+  edit to the copy, and give that path with the line ranges the edit changed.
 
 Done when: every text that will leave the session or be called verified has a staged file
 that matches, character for character, the wording you would send now.
@@ -28,8 +28,8 @@ that matches, character for character, the wording you would send now.
 ## 2. Fill the brief
 
 Fill every `<…>` slot in the brief below. Quote each user-supplied item verbatim from the
-user's messages in this session. In the doubt list, put every claim you recalled, inferred,
-or are unsure of.
+user's messages in this session, including decisions made earlier in it. In the doubt
+list, put every claim you recalled, inferred, or are unsure of.
 
 ```
 You are an independent fact-checker. Read <absolute path of this skill's
@@ -50,7 +50,7 @@ CONTEXT
 - Environment notes: <e.g. output-compression workarounds, or "none">
 - Text to check: <each path, and what it is: PR body, reply to X, doc edit, analysis,
   chat response>
-- Full document(s) for edits: <path, or "none">
+- Full document(s) for edits: <path and changed line ranges, or "none">
 - What it replies to or rests on: <paths or pasted text, or "none">
 - User-supplied items (facts and decisions), each quoted verbatim: <list, or "none">
 - Author's doubt list: <list, or "none">. Check these in addition to every claim in the
@@ -100,6 +100,7 @@ Done when all three hold:
 ## 5. Report
 
 In your message to the user, show:
+- the findings that change the text, in the report's ranked order;
 - every row that is not VERIFIED or SOURCE: USER, with its correction as applied, or the
   inline label the text already carries;
 - each overturned row, with the checker's evidence and your receipt side by side;
