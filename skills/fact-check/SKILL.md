@@ -53,8 +53,9 @@ LIMITS: read-only except for notes.
 CONTEXT
 - Scratchpad: <scratchpad>
 - Repo / branch / HEAD: <…, or "none">
-- Environment notes: <tools to use where several could (e.g. a primary Jira tool rather
-  than a discovery call), output-compression workarounds, or "none">
+- Environment notes: <where the raw data, scripts and tools the checks need live; tools
+  to use where several could (e.g. a primary Jira tool rather than a discovery call);
+  output-compression workarounds; or "none">
 - Text to check: <each path, what it is (PR body, reply to X, doc edit, analysis, chat
   response), and who reads it: within the team or session, or outside it>
 - Author: <the user, this session, or a named person>
@@ -121,7 +122,8 @@ In your message to the user, show:
 - each delta you judged claim-free, quoted;
 - each gap left after the resend;
 - the confidence line;
-- the checker's token use, summed across its completion notices.
+- the checker's token use, summed across its completion notices, marked "first pass
+  only" if a resend's notice gives no figure.
 
 Done when: every item above appears in your message. Posting, sending or committing waits for
 the user's approval of the final text.

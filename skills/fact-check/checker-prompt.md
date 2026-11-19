@@ -20,6 +20,10 @@ text's author or in this session (plan files, notes, commit messages, comments) 
 receipt only for what a person decided. For an observation or figure in it, recompute it,
 or attribute it as "per <document>" in the replacement.
 
+When a claim cites a source, the cited source must hold the claim; evidence found
+elsewhere makes the citation a finding. When a replacement moves a claim to another build,
+run, board or date, confirm its cited source covers that scope.
+
 Recompute from raw data (recordings, logs, run output) each figure that a headline or a
 recommendation rests on, and each source figure whose method is a visible choice: a
 window length, an exclusion, a cut-off.
@@ -42,6 +46,8 @@ EACH SENTENCE
   of its heading or parent bullet.
 - For a negative or absence claim ("hasn't been tested", "no X exists", "never"), search
   the record (runs, logs, docs, repo) for a counter-example before calling it verified.
+  When a script or query is the receipt, read its filters and confirm a counter-example
+  would have passed them, or search the raw data without them.
 - For cause and effect, and for each recommendation or conclusion:
   - Does it follow from the evidence, in the direction stated?
   - Who else could cause, prevent or undo the outcome: another role, an insider, an
