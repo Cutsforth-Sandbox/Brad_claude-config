@@ -6,13 +6,13 @@ description: Fact-check text with a fresh subagent until every claim is verified
 # Fact check
 
 A fresh subagent checks every claim in the text against primary sources and reports what
-is wrong, partly right, unverifiable or assumed (rules in
-[checker-prompt.md](checker-prompt.md)). The check is done when each such claim is
+is wrong, partly right, unverifiable or assumed. The check is done when each such claim is
 corrected in the text, labelled in it, or listed to the user.
 
-To **label** a claim is to mark it inline ("unverified:", "inferred from …", "assumed:")
-in text that stays within the team or session, or, for text read outside the session, to
-list it in the step 5 report instead.
+To **label** a claim is to state its confidence or provenance inline ("unverified, low
+confidence:", "per IT:", "inferred from …", "assumed:") in text that stays within the team
+or session, or, for text read outside the session, to list it with its confidence and
+provenance in the step 5 report instead.
 
 This skill checks text. To test a diagnosis or root cause, use `differential-diagnosis`.
 
@@ -39,8 +39,8 @@ Fill every `<…>` slot in the brief below.
 - Doubt list: every claim you recalled, inferred, or are unsure of.
 
 ```
-You are an independent fact-checker. Read <absolute path of this skill's
-checker-prompt.md> and follow it in full.
+Verify all unverified assertions and assumptions in the texts below, and label the
+confidence and provenance of anything that cannot be fully verified.
 
 LIMITS: read-only except for notes.
 - Allowed: file reads, read-only shell commands (git reads, grep, version queries, local
@@ -64,7 +64,32 @@ CONTEXT
 - Evidence already fetched: <paths, or "none">
 - User-supplied items (facts, decisions, pasted output), each quoted verbatim: <list, or
   "none">
-- Author's doubt list: <list, or "none">
+- Author's doubt list (check these in addition to everything else): <list, or "none">
+
+Check every factual claim, figure and code or run reference in the texts, not only the
+doubt list: trace each to its primary source, recompute figures from raw data where a
+conclusion rests on them, and check that figures agree with each other and with the rest
+of the document. Also:
+- For a doc edit, grep the full document and the repo for restatements of each changed
+  fact.
+- For a text that reports status against a ticket or plan, list the ticket's actions and
+  acceptance criteria it never mentions.
+
+Save the command and output of each live API call or web fetch behind a finding in
+<scratchpad>/fc/notes/. Never write a secret value (password, key, token) to notes or the
+report.
+
+REPORT (your final reply; keep it compact):
+1. A table of every claim that is wrong or only partly right: location, quoted claim,
+   what the source says (file and line, notes path or URL), and replacement wording for
+   the whole sentence. For text read outside the session, the replacement attributes an
+   unverified claim in plain words ("IT reports …") instead of an inline label.
+2. A table of claims you could not fully verify: claim, confidence (high/medium/low),
+   provenance (source, inference, recall, session document), and a suggested inline
+   label that states its confidence or provenance.
+3. A one-line count: claims checked, verified, corrected, unverifiable.
+4. Assumptions the text makes without stating them, each with a sentence to add
+   labelled "assumed:" and who must confirm it.
 ```
 
 Done when: no `<…>` slot remains, and each slot with nothing to give reads "none".
@@ -74,25 +99,28 @@ Done when: no `<…>` slot remains, and each slot with nothing to give reads "no
 Run one fresh general-purpose subagent on Opus, or on a stronger model if one wrote the
 text. Its whole brief is the filled brief from step 2.
 
-Done when the report passes every check in the BEFORE YOU RETURN section of
-[checker-prompt.md](checker-prompt.md). Read that section and check the report yourself.
+Done when the report has all four sections, and:
+- every wrong or partly right claim has a source and replacement wording;
+- every unverified claim has a confidence, a provenance and a label;
+- every assumption has an "assumed:" sentence and someone to confirm it.
 
 Send all failed checks back to the same subagent in one message. If any check still fails
-after that, label the affected claims "unverified:", and list the gap in the step 5
-report.
+after that, label the affected claims "unverified, not checked:", and list the gap in
+the step 5 report.
 
 ## 4. Apply corrections
 
 First re-run each live API call or web fetch saved in the notes behind a finding. If the
-output differs, label the claim "unverified:" and show it in the step 5 report.
+output differs, label the claim "unverified, source changed since the check:" and show
+it in the step 5 report.
 
 Apply each replacement verbatim to the staged files. List replacements for places outside
 the staged files (stale restatements elsewhere in the repo) in the step 5 report. To
 overturn a replacement, run the case yourself: a command, a file read, or a docs quote. A
 replacement overturned with a receipt counts as resolved.
 
-Label each unverifiable claim "unverified:" and each assumption with its "assumed:"
-sentence. For text read outside the session, the checker's replacements already carry no
+Label each claim not fully verified with the checker's suggested label, which states its
+confidence or provenance, and each assumption with its "assumed:" sentence. For text read outside the session, the checker's replacements already carry no
 inline labels, and these labels go in the step 5 report.
 
 A **delta** is wording in the final text that matches neither the checked text nor a
@@ -106,7 +134,7 @@ report items. Any other sentence in it is a delta.
 
 Done when all four hold:
 - every replacement is applied, overturned with a receipt, or listed in the step 5 report;
-- every unverifiable claim is labelled;
+- every claim not fully verified is labelled with its confidence or provenance;
 - every assumption is labelled, and every recommendation a refuted assumption undermines
   is replaced;
 - every delta is re-checked, labelled, or quoted as claim-free.
@@ -121,7 +149,6 @@ In your message to the user, show:
 - each overturned finding, with the checker's evidence and your receipt side by side;
 - each delta you judged claim-free, quoted;
 - each gap left after the resend;
-- the confidence line;
 - the checker's token use, summed across its completion notices, marked "first pass
   only" if a resend's notice gives no figure.
 
