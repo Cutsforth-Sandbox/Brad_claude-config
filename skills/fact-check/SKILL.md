@@ -1,15 +1,18 @@
 ---
 name: fact-check
-description: Fact-check text with a fresh subagent until every claim is verified or labelled. Use before posting, sending or committing text with factual claims, or reporting a finding as confirmed, and when asked to "verify any unverified assertions and assumptions".
+description: Fact-check text with a fresh subagent until every claim is verified, corrected, labelled or listed to the user. Use before posting, sending or committing text with factual claims, or reporting a finding as confirmed, and when asked to "verify any unverified assertions and assumptions".
 ---
 
 # Fact check
 
-A fresh subagent builds an **inventory** of every claim in the text and returns a verdict
-for each row. The check is done when every claim is in one of three states:
-- backed by a **receipt** (defined in [checker-prompt.md](checker-prompt.md), RECEIPT);
-- resting on a user-supplied item, quoted verbatim;
-- carrying an inline label in the text.
+A fresh subagent checks every claim in the text against primary sources and reports what
+is wrong, partly right, unverifiable or assumed (rules in
+[checker-prompt.md](checker-prompt.md)). The check is done when each such claim is
+corrected in the text, labelled in it, or listed to the user.
+
+To **label** a claim is to mark it inline ("unverified:", "inferred from …", "assumed:")
+in text that stays within the team or session, or, for text read outside the session, to
+list it in the step 5 report instead.
 
 This skill checks text. To test a diagnosis or root cause, use `differential-diagnosis`.
 
@@ -27,14 +30,17 @@ that matches, character for character, the wording you would send now.
 
 ## 2. Fill the brief
 
-Fill every `<…>` slot in the brief below. Quote each user-supplied item verbatim from the
-user's messages in this session, including decisions made earlier in it. In the doubt
-list, put every claim you recalled, inferred, or are unsure of.
+Fill every `<…>` slot in the brief below.
+- User-supplied items: quote verbatim from the user's messages in this session, including
+  decisions made earlier in it and command output the user pasted that bears on the
+  text's claims.
+- Evidence already fetched: files, logs and command output already in the scratchpad or
+  on disk, so the checker does not fetch them again.
+- Doubt list: every claim you recalled, inferred, or are unsure of.
 
 ```
 You are an independent fact-checker. Read <absolute path of this skill's
-checker-prompt.md> and follow it in full. Your report must let the caller leave every
-claim backed by a receipt, resting on a user-supplied item, or labelled in the text.
+checker-prompt.md> and follow it in full.
 
 LIMITS: read-only except for notes.
 - Allowed: file reads, read-only shell commands (git reads, grep, version queries, local
@@ -47,14 +53,17 @@ LIMITS: read-only except for notes.
 CONTEXT
 - Scratchpad: <scratchpad>
 - Repo / branch / HEAD: <…, or "none">
-- Environment notes: <e.g. output-compression workarounds, or "none">
-- Text to check: <each path, and what it is: PR body, reply to X, doc edit, analysis,
-  chat response>
+- Environment notes: <tools to use where several could (e.g. a primary Jira tool rather
+  than a discovery call), output-compression workarounds, or "none">
+- Text to check: <each path, what it is (PR body, reply to X, doc edit, analysis, chat
+  response), and who reads it: within the team or session, or outside it>
+- Author: <the user, this session, or a named person>
 - Full document(s) for edits: <path and changed line ranges, or "none">
 - What it replies to or rests on: <paths or pasted text, or "none">
-- User-supplied items (facts and decisions), each quoted verbatim: <list, or "none">
-- Author's doubt list: <list, or "none">. Check these in addition to every claim in the
-  text.
+- Evidence already fetched: <paths, or "none">
+- User-supplied items (facts, decisions, pasted output), each quoted verbatim: <list, or
+  "none">
+- Author's doubt list: <list, or "none">
 ```
 
 Done when: no `<…>` slot remains, and each slot with nothing to give reads "none".
@@ -66,48 +75,53 @@ text. Its whole brief is the filled brief from step 2.
 
 Done when the report passes every check in the BEFORE YOU RETURN section of
 [checker-prompt.md](checker-prompt.md). Read that section and check the report yourself.
-A receipt's command output may sit in the cited notes file; read it.
 
 Send all failed checks back to the same subagent in one message. If any check still fails
-after that, label the affected claims inline as "unverified:", and list the gap in the step
-5 report.
+after that, label the affected claims "unverified:", and list the gap in the step 5
+report.
 
 ## 4. Apply corrections
 
-First re-run each live API call or web fetch saved in the notes behind a REFUTED or PARTLY
-row or a correction. If the output differs, label the claim inline as "unverified:" and
-show the row in the step 5 report.
+First re-run each live API call or web fetch saved in the notes behind a finding. If the
+output differs, label the claim "unverified:" and show it in the step 5 report.
 
-Apply each correction verbatim to the staged files. To overturn one, run the case yourself:
-a command, a file read, or a docs quote. A correction overturned with a receipt counts as
-resolved.
+Apply each replacement verbatim to the staged files. List replacements for places outside
+the staged files (stale restatements elsewhere in the repo) in the step 5 report. To
+overturn a replacement, run the case yourself: a command, a file read, or a docs quote. A
+replacement overturned with a receipt counts as resolved.
+
+Label each unverifiable claim "unverified:" and each assumption with its "assumed:"
+sentence. For text read outside the session, the checker's replacements already carry no
+inline labels, and these labels go in the step 5 report.
 
 A **delta** is wording in the final text that matches neither the checked text nor a
-correction applied verbatim. For each delta, do one of three things:
+replacement applied verbatim. For each delta, do one of three things:
 - re-run this skill on the full final text, with the delta lines in the doubt list;
-- label each claim in the delta inline ("unverified:", "inferred from …");
+- label each claim in the delta;
 - quote it in the step 5 report as claim-free.
 
 For a chat response, the step 5 message carries the corrected response in full plus the
 report items. Any other sentence in it is a delta.
 
-Done when all three hold:
-- every correction is applied, or overturned with a receipt;
-- every "assumed:" sentence the report gives is added, and every recommendation a REFUTED
-  assumption undermines is replaced;
+Done when all four hold:
+- every replacement is applied, overturned with a receipt, or listed in the step 5 report;
+- every unverifiable claim is labelled;
+- every assumption is labelled, and every recommendation a refuted assumption undermines
+  is replaced;
 - every delta is re-checked, labelled, or quoted as claim-free.
 
 ## 5. Report
 
 In your message to the user, show:
-- the findings that change the text, in the report's ranked order;
-- every row that is not VERIFIED or SOURCE: USER, with its correction as applied, or the
-  inline label the text already carries;
-- each overturned row, with the checker's evidence and your receipt side by side;
+- the findings that change the text, in the report's ranked order, each with its
+  replacement as applied;
+- the unverifiable claims and assumptions, with the label the text carries or the note
+  that they are listed here only;
+- each overturned finding, with the checker's evidence and your receipt side by side;
 - each delta you judged claim-free, quoted;
 - each gap left after the resend;
-- the assumptions list;
-- the confidence line.
+- the confidence line;
+- the checker's token use, summed across its completion notices.
 
 Done when: every item above appears in your message. Posting, sending or committing waits for
 the user's approval of the final text.

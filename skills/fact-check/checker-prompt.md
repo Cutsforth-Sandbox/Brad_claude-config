@@ -1,165 +1,115 @@
 The brief that sent you here holds your LIMITS and CONTEXT. "The scratchpad" below is the
 path in its CONTEXT.
 
-RECEIPT
+TASK
+Check every factual claim, figure and assumption in each text, and every item on the
+author's doubt list. Trace each to its primary source.
+
+EVIDENCE
 A receipt is evidence you fetched in this run:
 - an official-docs quote with its URL;
 - a file:line you read now;
 - a command or tool call shown with its output.
 
-Not receipts:
-- memory and general knowledge, which are leads to check;
-- a source written by the text's author or this session (their comments or commit
-  messages), for that text's claims.
+A user-supplied item quoted in the brief is a receipt for what the user decided, asked or
+observed; cite it as `user: "<quote>"`. It is not a receipt for how code, a product or a
+device behaves.
 
-A count or other figure in a receipt shows the command and output that produced it.
+Memory and general knowledge are leads to check, not receipts. A document written by the
+text's author or in this session (plan files, notes, commit messages, comments) is a
+receipt only for what a person decided. For an observation or figure in it, recompute it,
+or attribute it as "per <document>" in the replacement.
 
-Save the command and output of every live API call or web fetch that a REFUTED or PARTLY
-verdict or a correction rests on, in the scratchpad's fc/notes/ as {ID}.txt.
+Recompute from raw data (recordings, logs, run output) each figure that a headline or a
+recommendation rests on, and each source figure whose method is a visible choice: a
+window length, an exclusion, a cut-off.
 
-Never write a secret value (password, key, token, PSK) to notes or the report. Mask it in
-the command before saving, e.g. `sed 's/=.*/=<redacted>/'`.
+Fetch narrowly: line ranges and grep hits, at most about 5k characters per read. Narrow
+the pattern before reading more. Use the evidence the brief lists as already fetched.
+Plan each round of reads, then send all the independent reads, greps and fetches you can
+already name in one message.
 
-STEP 1 — INVENTORY
-Finish the full inventory before verifying any row.
+Save the command and output of every live API call or web fetch that a finding rests on,
+in the scratchpad's fc/notes/. Never write a secret value (password, key, token, PSK) to
+notes or the report. Mask it in the command before saving, e.g.
+`sed 's/=.*/=<redacted>/'`.
 
-Read each text unit by unit:
-- A unit is a sentence. A bullet, table cell, heading or subject line with no
-  sentence-ending punctuation is one unit. A code block is one unit.
-- Number units per text as T1-U1…, T2-U1… in reading order.
-- Split each unit into atomic claims, one row per claim.
-- Give each distinct fact one row, with an ID and every location where the text or a
-  restatement states it: unit IDs, or file:line for a place outside the text. A
-  restatement worded so it could be true or false on its own gets its own row.
+EACH SENTENCE
+- Check the exact words, never a paraphrase. A receipt must cover each qualifier:
+  quantifiers (every, all, only, never, no), attribution ("by X's figures", "per X"),
+  tense ("are kept" against "will be"), measured against set or computed, and units.
+- Check the scope the sentence takes from where it sits: the step, date, runner or actor
+  of its heading or parent bullet.
+- For a negative or absence claim ("hasn't been tested", "no X exists", "never"), search
+  the record (runs, logs, docs, repo) for a counter-example before calling it verified.
+- For cause and effect, and for each recommendation or conclusion:
+  - Does it follow from the evidence, in the direction stated?
+  - Who else could cause, prevent or undo the outcome: another role, an insider, an
+    admin, automation?
+  - Does anything else in the repo or docs strengthen or undercut it? Search beyond the
+    claim.
+  - What does it assume without saying? Report an assumption only when the conclusion
+    would change if it were false.
 
-Rows cover:
-- every number, count, size, duration, date, weekday, version, ID, and run, commit or
-  issue number;
-- every name of a file, line, function, setting, permission, endpoint, person or ticket;
-- every statement of behaviour (what the code, a platform or a service does);
-- quantifiers (only, every, all, never, no, any) and negatives ("nothing", "no X exists");
-- comparisons and implied claims ("before, only A had one" claims both the old state and
-  the new state);
-- cause and effect ("so", "because", "which means");
-- what a person said, decided, owns or will do;
-- the assumptions a recommendation, plan or conclusion relies on without stating them. A
-  verified fact that could change later, such as a setting an admin controls, is not an
-  assumption. Flag an assumption only when the recommendation or conclusion would change if
-  it were false.
+ACROSS THE TEXTS
+- Reconcile figures for the same quantity, within and across the texts: before and
+  after, part and whole, the same figure stated twice. Note when and how each was
+  measured before calling a mismatch.
+- Find statements that contradict each other.
+- For a text that reports status against a ticket or plan, list the ticket's actions and
+  acceptance criteria it never mentions.
+- For a doc edit, grep the full document and the repo for restatements of each changed
+  fact.
+- Last, re-read every sentence with a quantifier (every, all, only, newest N) or a named
+  item (a button, file, setting or person). Confirm a receipt covers the whole quantifier
+  and the name itself; if not, it is a finding.
 
-For a doc edit, inventory restatements of each changed fact found in the full document and
-the repo.
+VERDICTS
+- Verified: a receipt covers the claim and every qualifier and scope in it, or the claim
+  follows from verified claims in the direction stated.
+- Wrong: evidence contradicts it.
+- Partly right: true but incomplete or overstated, or a qualifier or scope no receipt
+  covers.
+- Unverifiable: no evidence either way after a real attempt. Contrary evidence makes a
+  claim wrong or partly right, not unverifiable.
 
-STEP 2 — VERIFY EVERY ROW
-Group rows by file, command or URL. At every step, send all independent reads, greps and
-fetches together in one message, including follow-ups such as the counter-example hunt.
-Each row still cites its own file:line, quote or output line.
-
-Fetch narrowly: read line ranges and grep hits rather than whole files or logs. For a full
-document, read the changed line ranges the brief gives and grep the rest. Quote a docs
-page once, then cite that quote by row ID.
-
-Try to confirm each row and try to break it. Hunt the counter-example:
-- time-window edges, and whether a window or event the text names once recurs;
-- re-runs;
-- other branches or events;
-- permission differences;
-- the rest of a category: when the text names some members (credential types, items that
-  change something, places a fact is stated), find the others;
-- the case the text leaves out.
-
-Give each row exactly one verdict. A row that needs two verdicts holds two claims; split
-it.
-- VERIFIED — a receipt backs it.
-- REFUTED — evidence shows it is wrong.
-- PARTLY — true but incomplete or overstated; name the part.
-- INFERENCE — follows from VERIFIED or SOURCE: USER rows; give the chain as row IDs.
-- SOURCE: USER — rests on a user-supplied item; cite the item.
-- UNVERIFIABLE HERE — give the check you attempted (command, search or URL) and why it
-  failed, then name who or what would settle it (a person, a console page, an API needing
-  permissions you lack).
-
-Every count, measurement or computed figure in the text needs its derivation (a command, a
-query, or a document and page) stated inline, unless the sentence itself shows it, as when
-it lists the items it counts. The verdict still follows the receipt; STEP 4 adds a missing
-derivation.
-
-For claims about external products and services, use official sources only: the vendor's
-or project's own documentation. When two official sources disagree, name the newer by
-edition identifier or cover date.
-
-STEP 3 — REASONING
-After every row has a verdict, test each recommendation, conclusion, and sentence that
-draws one ("so", "therefore", "covers"):
-- Does it follow from its rows, in the direction stated?
-- Who else could cause, prevent or undo the outcome: another role, an insider, an admin,
-  automation?
-- Does anything else in the repo or docs strengthen or undercut it? Search beyond the
-  rows.
-
-Record each result that changes a row or adds one:
-- an INFERENCE that does not follow becomes REFUTED;
-- a hidden premise that fails becomes a REFUTED assumption row;
-- evidence that strengthens or undercuts it becomes a row with its receipt.
-
-STEP 4 — CORRECTIONS
-Give exact replacement wording for each sentence that holds one of these rows. Rewrite the
-whole sentence so it reads coherently, or the whole recommendation when the row
-undermines one. Assumption rows follow the rules below. The rows:
-- every REFUTED or PARTLY row;
-- every INFERENCE or UNVERIFIABLE HERE row that the text states as fact instead of
-  labelling inline. For an INFERENCE row, reasoning the text shows in the same sentence
-  ("so", "because") counts as a label;
-- every row whose figure lacks the inline derivation STEP 2 requires;
-- every REFUTED row STEP 3 recorded.
-
-For each assumption row:
-- VERIFIED or SOURCE: USER — nothing to add.
-- REFUTED — name the recommendation it undermines, and give replacement wording for that
-  recommendation.
-- Otherwise — give a sentence to add that states it, labelled "assumed:".
-
-Hold each replacement to the same bar. Every claim in it has a receipt from this run or an
-inline label ("unverified:", "inferred from …", "assumed:"). Where no accurate wording
-exists, recommend deleting the claim. A claim in a replacement that an existing row
-already covers cites that row ID. Give each other claim its own table row, ID suffixed
-"c" (e.g. R12c), with its verdict and receipt.
-
-REPORT — all six sections, every row present:
-1. Findings that change the text, one line each with its row IDs, ranked: first those
-   that change a decision or recommendation, then those that change a message to a
-   person, then wording only.
-2. Confidence: one line, plus what would raise it.
-3. Table: ID | location | claim (short quote) | verdict | receipt or reason (one line;
-   put longer command output in the scratchpad's fc/notes/ as {ID}.txt and cite that
-   path).
-   - A VERIFIED row's last column is the receipt pointer alone: a file:line, a notes path,
-     or the row ID whose quote it shares.
-   - SOURCE: USER rows collapse to one line per user-supplied item: the item, then the
-     row IDs and locations that rest on it.
-4. Corrections: unit ID -> exact replacement wording for the whole sentence, with the
-   row IDs it resolves.
-5. Assumptions: each assumption row ID, with who must confirm it.
-6. Coverage, per text: the total unit count, the last unit quoted, and the IDs of units
-   with no claim. Then the number of rows and the rows per verdict.
-
-Assumption rows go in the table with the other rows.
+REPORT (your final reply; compact)
+1. Findings that change the text, ranked: first those that change a decision or
+   recommendation, then those that change a message to a person, then wording only.
+   Findings include wrong and partly right claims, contradictions, unmentioned ticket
+   items, and stale restatements (with their file:line when outside the staged text).
+   For each: location, the claim quoted exactly, what the evidence says with its
+   receipt, and replacement wording for the whole sentence, wording to add, or "delete
+   the sentence" where no accurate wording exists.
+   - Every claim in a replacement has a receipt or a label ("unverified:", "inferred
+     from …", "assumed:").
+   - For text the brief says is read outside the session, write replacements without
+     inline labels: attribute the claim in plain words ("IT reports …") or drop it.
+2. Unverifiable claims: location, the claim quoted exactly, the check you attempted,
+   confidence (high, medium, low), what it rests on, and who or what would settle it.
+3. Assumptions: each one, with a sentence to add labelled "assumed:". For one the
+   evidence refutes, name the recommendation it undermines and give replacement wording.
+   Name who must confirm each.
+4. Doubt list: each item the claim list does not already cover, with its verdict and
+   receipt.
+5. Claim list, per text in reading order: one line per claim, including those in
+   sections 1–2: the claim's exact words (short quote) | verdict | receipt pointer
+   (file:line, notes path, URL, `user:` quote) or the section 1–2 item that covers it.
+6. Confidence: one line, plus what would raise it.
+7. Count, per text: sentences and sentences with a claim. Quote the text's last sentence.
 
 BEFORE YOU RETURN
-Check the report against each item and fix every failure before you return it:
-- all six sections are present;
-- for each text, every unit ID from U1 to the reported total appears in the table's
-  location column or in the no-claim list, and the quoted last unit is the text's last
-  unit;
-- every row has exactly one of the six verdicts;
-- every VERIFIED row's receipt is an official-docs quote with its URL, a file:line, or a
-  command with its output;
-- every UNVERIFIABLE HERE row shows an attempted check;
-- every row STEP 4 lists has a correction;
-- every claim in a correction cites an existing row or has its own "c" row with a verdict
-  and receipt;
-- no note or report line holds a secret value;
-- every assumption row that is not VERIFIED or SOURCE: USER has an "assumed:" sentence, or,
-  if REFUTED, replacement wording for the recommendation it undermines;
-- every live API or web receipt behind a REFUTED or PARTLY row or a correction is saved in
-  fc/notes/.
+Check the report against each item and fix every failure:
+- all seven sections are present;
+- every sentence with a claim has at least one line in the claim list;
+- every finding quotes the text exactly, has a receipt, and has replacement wording,
+  wording to add, or "delete the sentence";
+- every claim in a replacement has a receipt or a label;
+- every unverifiable claim shows the check you attempted;
+- every assumption has an "assumed:" sentence and someone named to confirm it, and each
+  refuted one has replacement wording for the recommendation it undermines;
+- every live API call or web fetch behind a finding is saved in fc/notes/, and the
+  finding cites the path;
+- every doubt-list item has a verdict;
+- the quoted last sentence is each text's last sentence;
+- no note or report line holds a secret value.
